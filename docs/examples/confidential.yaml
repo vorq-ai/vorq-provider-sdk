@@ -1,0 +1,35 @@
+# Example: a confidential model — a daemon running inside a confidential VM,
+# serving through an inference service outside it. A complete, valid
+# vorqd.yaml — one model, one SLA window. The hosts are placeholders; every
+# secret comes from the environment.
+
+provider:
+  # REQUIRED: the daemon's payable wallet. Export VORQ_WALLET_KEY (a secp256k1
+  # key) before starting — the daemon refuses to start without it. Keep the key
+  # in the environment, never a literal in this file.
+  wallet_key: env:VORQ_WALLET_KEY
+  # NO box_key here. On a confidential provider the Curve25519 payload key is
+  # ephemeral: generated in guest memory each boot, published with that boot's
+  # attestation evidence, gone on exit. Declaring one fails at load — and a
+  # restart is therefore a key rotation.
+  capacity: 2
+
+models:
+  - model: deepseek-ai/e2ee-deepseek-v4-pro:fp8   # network-facing model id clients submit against
+    # The only switch. The model name is free-form; nothing reads meaning into it.
+    confidential: true
+    modality: text                  # what the catalog does not name, the operator must
+    slas:
+      # One published ask per SLA window. A rate is USD per 1M units of work,
+      # written as a QUOTED decimal string; an unquoted number is refused at
+      # startup, and so is more precision than the payment token holds.
+      "1h": { rate_in: "0.3", rate_out: "0.95" }
+    # The same backend block any model takes. The inference service is outside
+    # the VM; pick one that runs this model inside attested hardware of its own.
+    backend:
+      preset: openai-chat
+      base_url: https://inference.example.com/v1
+      model: deepseek-v4-pro        # the service's own model name
+      api_key: env:INFERENCE_API_KEY
+      # Params outside the forwarded set are stripped at request build, never rejected.
+      params_supported: [temperature, top_p, max_tokens, seed, stop]

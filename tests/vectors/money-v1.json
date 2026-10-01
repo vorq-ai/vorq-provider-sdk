@@ -1,0 +1,49 @@
+{
+  "format": "vorq-money-v1",
+  "purpose": "The one conversion between the USD decimal strings every API, SDK and config speaks and the atomic token integers the chain signs and settles. The coordinator parses and formats it at its boundary; both client SDKs and the provider daemon convert the same way before they sign. Hand-authored data owned by no single repo, distributed by `make money` and held honest by `make money-check`.",
+  "rule": {
+    "grammar": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$ — ASCII digits only; no sign, exponent, whitespace, grouping, or leading zeros; a fraction needs digits on both sides of the point.",
+    "fraction": "At most `decimals` fraction digits. More is refused, never rounded.",
+    "atomic": "atomic = usd × 10^decimals, exactly.",
+    "canonical": "Formatting an atomic integer gives the integer part, then `.` and the fraction with trailing zeros removed, and no point at all when the fraction is zero. Parsing accepts trailing zeros; formatting never emits them.",
+    "rates": "A rate is USD per 1M units of work. Because the chain's RATE_SCALE is 10^6 units, the same shift gives the on-chain rate: \"0.05\" at 6 decimals is 50000."
+  },
+  "canonical": [
+    { "decimals": 6, "usd": "0", "atomic": "0" },
+    { "decimals": 6, "usd": "1", "atomic": "1000000" },
+    { "decimals": 6, "usd": "0.05", "atomic": "50000" },
+    { "decimals": 6, "usd": "0.000001", "atomic": "1" },
+    { "decimals": 6, "usd": "0.000219", "atomic": "219" },
+    { "decimals": 6, "usd": "2.5", "atomic": "2500000" },
+    { "decimals": 6, "usd": "10.6264", "atomic": "10626400" },
+    { "decimals": 6, "usd": "340282366920938463463374607431768.211455", "atomic": "340282366920938463463374607431768211455" },
+    { "decimals": 18, "usd": "1", "atomic": "1000000000000000000" },
+    { "decimals": 18, "usd": "0.000000000000000001", "atomic": "1" },
+    { "decimals": 0, "usd": "42", "atomic": "42" }
+  ],
+  "parse_only": [
+    { "decimals": 6, "usd": "0.050", "atomic": "50000", "formats_as": "0.05" },
+    { "decimals": 6, "usd": "1.000000", "atomic": "1000000", "formats_as": "1" },
+    { "decimals": 6, "usd": "10.626400", "atomic": "10626400", "formats_as": "10.6264" }
+  ],
+  "refused": [
+    { "decimals": 6, "usd": "", "why": "empty" },
+    { "decimals": 6, "usd": "0.0000001", "why": "seven fraction digits at six decimals" },
+    { "decimals": 0, "usd": "1.5", "why": "a fraction at zero decimals" },
+    { "decimals": 6, "usd": "-1", "why": "sign" },
+    { "decimals": 6, "usd": "+1", "why": "sign" },
+    { "decimals": 6, "usd": "1e3", "why": "exponent" },
+    { "decimals": 6, "usd": "01", "why": "leading zero" },
+    { "decimals": 6, "usd": "00.5", "why": "leading zero" },
+    { "decimals": 6, "usd": ".5", "why": "no integer digits" },
+    { "decimals": 6, "usd": "5.", "why": "no fraction digits" },
+    { "decimals": 6, "usd": " 1", "why": "whitespace" },
+    { "decimals": 6, "usd": "1 ", "why": "whitespace" },
+    { "decimals": 6, "usd": "1,5", "why": "comma" },
+    { "decimals": 6, "usd": "1_000", "why": "grouping" },
+    { "decimals": 6, "usd": "0x10", "why": "hex" },
+    { "decimals": 6, "usd": "NaN", "why": "not a number" },
+    { "decimals": 6, "usd": "Infinity", "why": "not a number" },
+    { "decimals": 6, "usd": "١", "why": "non-ASCII digit" }
+  ]
+}

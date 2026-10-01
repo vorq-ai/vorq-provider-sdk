@@ -1,0 +1,11 @@
+{
+  "title": "Reference",
+  "pages": [
+    "configuration",
+    "presets",
+    "raw-mappings",
+    "cli-and-environment",
+    "metrics",
+    "logs"
+  ]
+}

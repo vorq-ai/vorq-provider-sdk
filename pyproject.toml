@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vorq-provider"
+version = "0.1.0rc1"
+description = "VORQ provider daemon (vorqd)"
+readme = "README.md"
+license = "FSL-1.1-ALv2"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "jsonpath-ng>=1.6",
+    "prometheus-client>=0.20",
+    "eth-account>=0.13",
+    # Already in the tree as eth-account's own dependency; declared because
+    # vorqd/opsig.py imports keccak from it directly to rebuild an EIP-712
+    # digest, and an undeclared import is one resolver change away from a
+    # missing module.
+    "eth-utils>=4.0",
+    "pynacl>=1.5",
+    "sentry-sdk>=2.0",
+]
+
+[project.scripts]
+vorqd = "vorqd.cli:main"
+
+[project.urls]
+Homepage = "https://vorq.co"
+Documentation = "https://docs.vorq.co/docs/provider"
+Repository = "https://github.com/vorq-ai/vorq-provider-sdk"
+Changelog = "https://github.com/vorq-ai/vorq-provider-sdk/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+# PEP 735. Install with `pip install -e . --group dev` (pip >= 25.1). Hatchling
+# does not surface a dependency-group as an extra, so `pip install -e '.[dev]'`
+# only warns "does not provide the extra 'dev'" and exits 0 having installed
+# nothing — the failure then surfaces as an ImportError under pytest.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["vorqd"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/vorqd", "/README.md", "/CHANGELOG.md", "/LICENSE.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
