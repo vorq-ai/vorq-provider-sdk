@@ -1,0 +1,21 @@
+name: Publish docs
+
+on:
+  push:
+    branches: [main]
+    paths: [docs/**]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_KEY }}
+          owner: vorq-ai
+          repositories: vorq-docs
+      - run: gh api repos/vorq-ai/vorq-docs/dispatches -f event_type=docs-changed
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}

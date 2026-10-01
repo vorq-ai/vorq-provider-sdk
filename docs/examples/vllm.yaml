@@ -1,0 +1,83 @@
+# Example: an OpenAI-compatible vLLM backend behind the openai-chat preset.
+# A complete, valid vorqd.yaml — one text model, two SLA windows.
+
+provider:
+  # REQUIRED: the daemon's payable wallet. With no `wallet_key` line the daemon
+  # reads VORQ_WALLET_KEY (a secp256k1 key) from the environment; it refuses to
+  # start without it. Never put the key in this file.
+  # REQUIRED on a regular provider like this one: the daemon's Curve25519
+  # payload-decryption identity — clients seal their inputs to it. Export
+  # VORQ_BOX_KEY before starting; keep it stable, or in-flight sealed jobs
+  # become undecryptable. A confidential provider omits it entirely and
+  # generates a per-boot key inside the enclave (see examples/confidential.yaml).
+  box_key: env:VORQ_BOX_KEY
+  capacity: 4
+
+  # OPTIONAL — the private acceptance floor, left off here. Without this block
+  # the daemon claims only at the published rates below, exactly as it always
+  # did; uncommenting it is a deliberate decision to be paid less than you
+  # advertise, so it is never on by default.
+  #
+  # None of this is published: the ask book keeps advertising the `slas` rates
+  # unchanged, and no extra on-chain transaction is involved. It decides only
+  # how far UNDER its own published ask this daemon will privately claim while
+  # the backend is idle — a cheap fill beats a GPU doing nothing. It needs the
+  # model's `load:` block below to do anything at all; with no fresh load
+  # reading the daemon treats the backend as busy and takes no discount.
+  # pricing:
+  #   max_discount_pct: 20    # the whole allowance at a completely idle backend,
+  #                           # shrinking linearly to nothing as load rises
+  #   bid_tolerance_pct: 10   # a further allowance, only while load is under low_load_pct
+  #   low_load_pct: 30        # what counts as "quiet", in percent of backend load
+
+models:
+  - model: deepseek-ai/deepseek-v4-pro:fp8          # network-facing model id clients submit against
+    modality: text                  # what the catalog does not name, the operator must
+    slas:
+      # One published ask per SLA window. A rate is USD per 1M units of work (here
+      # tokens), written as a QUOTED decimal string; an unquoted number is refused
+      # at startup, and so is more precision than the payment token holds.
+      "24h": { rate_in: "0.16", rate_out: "0.55" }
+      "1h":  { rate_in: "0.22", rate_out: "0.75" }
+    backend:
+      preset: openai-chat
+      base_url: http://localhost:8000/v1
+      model: deepseek-ai/DeepSeek-V4-Pro   # the runtime's own model name (need not match `model`)
+      # readiness gate — do not publish asks before the model is loaded
+      health: { path: /health }
+      # params outside the forwarded set are stripped at request build, never rejected.
+      # params_supported REPLACES the preset's default set with exactly what this
+      # runtime accepts — standard fields and any nonstandard knob alike. Omit it to
+      # keep the default set (temperature, top_p, max_tokens, seed, stop, ...).
+      params_supported: [temperature, top_p, max_tokens, seed, stop, reasoning_effort]
+      # runtime extension params pass through the backend request body unchanged
+      extra_params: { chat_template_kwargs: { enable_thinking: false } }
+      # OPTIONAL — stream the completion and reassemble it, so `timeout_s`
+      # bounds one silence between chunks rather than the whole answer.
+      # stream: true
+      # OPTIONAL — limits, for a backend with a request quota or a shared pool.
+      # A failed attempt (429, 5xx, a timeout) is retried up to `retries` times,
+      # spaced by a doubling backoff from `retry_backoff_s` (a longer Retry-After
+      # wins), and never scheduled past the job's SLA deadline. `timeout_s` caps
+      # one attempt; `concurrency` and the `rate_limit` windows bound what the
+      # daemon starts, and the poll offers the coordinator no more than they
+      # admit — so a spent quota is never a claimed job that cannot run. The
+      # window at the entry's shortest SLA is also what it may hold: with the
+      # `1h` window below, an hour's budget of jobs may be claimed at once and
+      # started `concurrency` at a time.
+      # retries: 8
+      # retry_backoff_s: 30
+      # timeout_s: 300
+      # concurrency: 4
+      # rate_limit: { "1m": 40, "1h": 1000, "24h": 5000 }
+
+    # Where this backend reports how busy it is — the same Prometheus endpoint
+    # your own monitoring scrapes. Read-only, once per poll sweep, and the only
+    # thing it feeds is the private floor above, so it is commented out with it.
+    # Any runtime exporting Prometheus text works: name the endpoint and the
+    # series, and set `scale` to whatever turns that series into 0..1 (1.0 for a
+    # ratio, 100 for a percentage such as a GPU exporter's utilisation series).
+    # load:
+    #   url: http://localhost:8000/metrics
+    #   metric: "vllm:kv_cache_usage_perc"
+    #   scale: 1.0

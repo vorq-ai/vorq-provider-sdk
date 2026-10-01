@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+tests
+__pycache__
+**/__pycache__
+*.pyc
+CHANGELOG.md
+
+# A file-sync client resolves a conflict by leaving a "<name> 2" copy beside the
+# original. Those copies are never build input, and one of them silently
+# shadowing a real path is not a failure anyone wants to debug.
+* 2
+**/* 2

@@ -1,0 +1,75 @@
+# Example: an async task-queue media backend, written as a raw poll mapping.
+# A complete, valid vorqd.yaml — one media model, a single SLA window.
+# The host is a placeholder; the API key comes from the environment.
+
+provider:
+  # REQUIRED: the daemon's payable wallet. With no `wallet_key` line the daemon
+  # reads VORQ_WALLET_KEY (a secp256k1 key) from the environment; it refuses to
+  # start without it.
+  # REQUIRED on a regular provider like this one: the daemon's Curve25519
+  # payload-decryption identity — clients seal their inputs to it. Export
+  # VORQ_BOX_KEY before starting; keep it stable, or in-flight sealed jobs
+  # become undecryptable. A confidential provider omits it entirely and
+  # generates a per-boot key inside the enclave (see examples/confidential.yaml).
+  box_key: env:VORQ_BOX_KEY
+  capacity: 2
+
+models:
+  - model: black-forest-labs/flux-2-dev:fp8           # network-facing model id clients submit against
+    modality: image                 # what the catalog does not name, the operator must
+    slas:
+      # Media model: only rate_out, USD per 1M output pixels as a quoted
+      # decimal string.
+      "24h": { rate_out: "0.012" }
+    backend:
+      request:                      # the submit call
+        method: POST
+        url: https://queue.example.com/v1/models/flux-dev   # placeholder host
+        headers: { Authorization: "Key env:QUEUE_BACKEND_KEY" }   # backend secret via env: indirection
+        # Forward the metered cost driver to the backend. The daemon clamps
+        # num_images down to the charged units_out (output pixels = num_images ×
+        # width × height) BEFORE this renders, so passing {input.num_images}
+        # through is what makes the clamp bind at the backend — omit it and the
+        # backend renders the full over-ask while you settle (and are paid) for
+        # fewer. width/height set each image's pixels; extra quality params (seed,
+        # steps, guidance) pass through the same way if the backend accepts them.
+        body:
+          prompt: "{input.prompt}"
+          width: "{input.width}"
+          height: "{input.height}"
+          num_images: "{input.num_images}"
+      response:
+        mode: poll
+        poll:
+          status_url: "$.status_url"   # JSONPath into the submit response
+          status_field: "$.status"     # JSONPath into each poll response
+          done_values: [COMPLETED]
+          failed_values: [FAILED]
+          interval_s: 2                # a fast task queue: poll every two seconds
+          # max_polls: 60             # or, for work measured in hours: interval = sla / max_polls
+          # A backend that answers the submit with a task id can be resumed after a
+          # daemon restart: replace status_url with a templated request and name the
+          # id field — the daemon records it in provider.state_db.
+          # request: { method: GET, url: "https://queue.example.com/v1/tasks/{handle}" }
+          # handle: "$.task_id"
+        result:
+          media_urls: "$.images[*].url"   # URLs the daemon fetches and seals into the result
+      retries: 2      # attempts after the first, backed off, never past the job's SLA
+    # OPTIONAL — where this backend reports how busy it is, for the private
+    # acceptance floor (see vllm.yaml and the "Set prices" guide). A raw
+    # backend like this one exposes no metrics of its own, so the series comes
+    # from whatever already watches the GPUs — here a GPU exporter whose
+    # utilisation series is a percentage, hence `scale: 100`. The URL is
+    # always absolute: the metrics endpoint need not share a host with the
+    # inference API. Uncommenting this alone starts the scrape, and once the
+    # endpoint answers the reading appears on the `vorqd_backend_load` gauge —
+    # but it changes no price: what a reading is worth is `provider.pricing`,
+    # and without that block the floor stays at the published rates. A scrape
+    # that fails publishes no reading, only a `warning` and a tick on
+    # `vorqd_load_probe_failures_total`; it is never fatal. The host below is a
+    # placeholder like the rest of this file, so expect exactly that until you
+    # point it at a real exporter.
+    # load:
+    #   url: http://localhost:9400/metrics
+    #   metric: DCGM_FI_DEV_GPU_UTIL
+    #   scale: 100

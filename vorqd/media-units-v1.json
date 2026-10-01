@@ -1,0 +1,461 @@
+{
+  "format": "vorq-media-units-v1",
+  "purpose": "The one table every party derives media billing units from: both client SDKs, which sign the units into an order, and the provider daemon, which re-derives them to check what it was asked to do. Hand-authored data owned by no single repo, distributed by `make media` and held honest by `make media-check` and e2e/test_vectors.py.",
+  "why_a_file": [
+    "A media request names its shape as enums — a resolution tier and a whole number of seconds — while the chain bills in pixels. Something has to turn one into the other, and the client that signs the order and the provider that prices the work have to agree on it exactly or the provider is paid for a job it did not do.",
+    "The mapping is a table, not arithmetic. A tier is a pixel BUDGET, not a height: the models this interface describes render every shape of a tier at about the same area, so 16:9 keeps the familiar frame the tier is named for and every other ratio is the frame of that ratio with the same area, to the nearest 8 pixels. No rounding rule lands on the same 8 in three languages, so every frame is enumerated and the portrait transposes written out beside them.",
+    "This file also carries the three defaults that were hand-written in four repos at once (vorq/_client.py, src/units.ts, vorqd/backend.py, vorqd/scheduler.py). Same reasoning as the body ceiling: a constant repeated is a constant that drifts, and editing one copy left every suite green."
+  ],
+  "rules": [
+    "frames[aspect][resolution] is [width, height] in pixels. An implementation reads it; it never computes it. Every frame in one tier is within 1% of the 16:9 frame's area, so one rate_out prices every shape of a tier alike.",
+    "units_out for video is frame_pixels x duration_secs. For image it is frame_pixels x num_images. Both are exact output pixels, so one rate_out prices a per-image, a per-megapixel and a per-second backend alike.",
+    "units_in for a reference-conditioned request is the sum over its PIXEL-BEARING reference assets of width x height x max(1, duration_secs): the singular reference_keys in order, then every element of reference_images and reference_videos. A still counts as one second, so rate_in prices one input pixel-second across stills and clips alike. A media request carrying no reference declares 0. A clip (video, or an element of reference_videos) must state its duration_secs, rounded UP to whole seconds: left out it would be priced as a one-second still, and the provider reads the clip's real length and hands the job back. An element of reference_audios has no pixels and counts ZERO — nothing meters it — but it is capped in number and in bytes, because it is still work the provider is handed.",
+    "aspect_ratio 'auto', and an absent aspect_ratio, resolve against the first pixel-bearing reference's declared dimensions: pick the entry of auto_order minimising |ln(w/h) - ln(w_i/h_i)|, ties to the earlier entry, and fall back to auto_fallback when there is no reference. The logarithm is what makes it scale-symmetric. Client and provider run this against the same declared numbers, so they agree by construction. aspect_ratio 'adaptive' asks the model to keep the reference's own shape, which no row names: it is priced at the LARGEST frame of the tier, a cap the delivered clip settles under.",
+    "A request's shape decides BOTH units: it is text when it names an output-token ceiling (max_output_tokens, max_tokens, max_completion_tokens), else video when it names duration or duration_secs, else image when it names num_images, width, resolution or any reference, else text. height is deliberately NOT a shape key: it sizes a frame once a request is already media, and a request naming only a height is not one anybody writes. One decision, so a request can never be priced as text on one side and as pixels on the other.",
+    "caps are refused client-side before anything is sealed and re-checked provider-side after decryption. They exist so the convention cannot overflow the uint32 the order signs. The worst request is four clips (video plus three reference_videos) at reference_pixels for reference_duration_s, 1990656000, plus eight stills, 66355200: 2057011200, inside 4294967295.",
+    "Explicit width/height always win over a resolution tier — the legacy spelling stays first-class and its numbers must not move.",
+    "duration accepts a whole number or its decimal string ('5' and 5 are the same request): a string is ASCII digits only, so '7.5', '1e1', '+5' and ' 5 ' are not durations, and a fractional number is cut to its whole seconds. duration_secs is the canonical spelling and wins when both are present; a null one is an absent one. A client refuses what is not a duration before signing; a provider handed one prices the default.",
+    "duration 'auto' asks the model to choose the clip's length. It is priced at defaults.auto_duration_secs, a cap: the provider settles the seconds actually delivered, and hands back a job whose cap does not cover the longest clip its backend might choose.",
+    "units_out is always a CAP. The provider reads the delivered output's own header and settles min(cap, delivered pixels x delivered seconds), labelling the result with what was delivered rather than what was priced."
+  ],
+  "defaults": {
+    "dim": 1024,
+    "duration_secs": 5,
+    "units_out": 4096,
+    "auto_duration_secs": 15
+  },
+  "caps": {
+    "reference_pixels": 8294400,
+    "reference_assets": 12,
+    "reference_duration_s": 60,
+    "reference_audio_bytes": 15728640
+  },
+  "resolutions": ["480p", "720p", "1080p", "4k"],
+  "auto_order": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+  "auto_fallback": "16:9",
+  "adaptive_aspect": "adaptive",
+  "auto_duration": "auto",
+  "reference_keys": ["image", "end_image", "video"],
+  "reference_list_keys": {
+    "reference_images": 9,
+    "reference_videos": 3,
+    "reference_audios": 3
+  },
+  "clip_keys": ["video", "reference_videos"],
+  "audio_keys": ["reference_audios"],
+  "output_ceiling_keys": ["max_output_tokens", "max_tokens", "max_completion_tokens"],
+  "frames": {
+    "21:9": { "480p": [976, 416], "720p": [1472, 632], "1080p": [2200, 944], "4k": [4400, 1888] },
+    "16:9": { "480p": [854, 480], "720p": [1280, 720], "1080p": [1920, 1080], "4k": [3840, 2160] },
+    "4:3": { "480p": [736, 552], "720p": [1112, 832], "1080p": [1664, 1248], "4k": [3328, 2496] },
+    "1:1": { "480p": [640, 640], "720p": [960, 960], "1080p": [1440, 1440], "4k": [2880, 2880] },
+    "3:4": { "480p": [552, 736], "720p": [832, 1112], "1080p": [1248, 1664], "4k": [2496, 3328] },
+    "9:16": { "480p": [480, 854], "720p": [720, 1280], "1080p": [1080, 1920], "4k": [2160, 3840] }
+  },
+  "cases": [
+    {
+      "name": "legacy-image-pixels",
+      "why": "The spelling that shipped first stays first-class and its output number must not move: every existing media job on the network is this shape.",
+      "input": {
+        "prompt": "a cat",
+        "width": 1024,
+        "height": 768,
+        "num_images": 2
+      },
+      "units_in": 0,
+      "units_out": 1572864
+    },
+    {
+      "name": "legacy-video-pixels",
+      "why": "Same, for the video spelling: explicit pixels times explicit seconds.",
+      "input": {
+        "prompt": "x",
+        "width": 1280,
+        "height": 720,
+        "duration_secs": 5
+      },
+      "units_in": 0,
+      "units_out": 4608000
+    },
+    {
+      "name": "tiered-video-string-duration",
+      "why": "The shape this round exists for. A resolution tier and a duration serialized as a string — which is how the prevailing interface spells it — priced in exact output pixels.",
+      "input": {
+        "prompt": "x",
+        "resolution": "1080p",
+        "aspect_ratio": "16:9",
+        "duration": "5"
+      },
+      "units_in": 0,
+      "units_out": 10368000
+    },
+    {
+      "name": "a-null-duration-secs-is-an-absent-one",
+      "why": "A serializer that writes every field writes this. Null is absent in every other read of this table, and a client that read it as absent while the provider read it as 'present, so default' would escrow eight seconds for a five-second render.",
+      "input": {
+        "prompt": "x",
+        "resolution": "720p",
+        "aspect_ratio": "16:9",
+        "duration_secs": null,
+        "duration": 8
+      },
+      "units_in": 0,
+      "units_out": 7372800
+    },
+    {
+      "name": "a-fractional-duration-is-cut-to-whole-seconds",
+      "why": "Three languages, three number parsers. Pinned so that 7.5 is 7 in all of them rather than 7 in two and an error in the third.",
+      "input": {
+        "prompt": "x",
+        "resolution": "720p",
+        "aspect_ratio": "16:9",
+        "duration": 7.5
+      },
+      "units_in": 0,
+      "units_out": 6451200
+    },
+    {
+      "name": "tiered-video-integer-duration",
+      "why": "5 and '5' are the same request. A client that quoted its duration must not sign different terms from one that did not.",
+      "input": {
+        "prompt": "x",
+        "resolution": "1080p",
+        "aspect_ratio": "16:9",
+        "duration": 5
+      },
+      "units_in": 0,
+      "units_out": 10368000
+    },
+    {
+      "name": "reference-image-to-video",
+      "why": "One still frame conditioning a clip: the reference counts as its pixels for one second, so rate_in prices an input pixel-second whether the reference moves or not.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1280,
+          "height": 720
+        },
+        "resolution": "720p",
+        "aspect_ratio": "16:9",
+        "duration": 5
+      },
+      "units_in": 921600,
+      "units_out": 4608000
+    },
+    {
+      "name": "reference-start-and-end-frame",
+      "why": "Two stills are two references and the input leg is their sum — an end frame is work the provider is handed, not decoration.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1280,
+          "height": 720
+        },
+        "end_image": {
+          "b64": "AA==",
+          "media_type": "image/jpeg",
+          "width": 1280,
+          "height": 720
+        },
+        "resolution": "720p",
+        "aspect_ratio": "16:9",
+        "duration": 5
+      },
+      "units_in": 1843200,
+      "units_out": 4608000
+    },
+    {
+      "name": "reference-clip",
+      "why": "A moving reference costs its pixels for every second of itself, and its own length is independent of the output's.",
+      "input": {
+        "prompt": "x",
+        "video": {
+          "b64": "AA==",
+          "media_type": "video/mp4",
+          "width": 640,
+          "height": 480,
+          "duration_secs": 4
+        },
+        "resolution": "480p",
+        "aspect_ratio": "4:3",
+        "duration": 6
+      },
+      "units_in": 1228800,
+      "units_out": 2437632
+    },
+    {
+      "name": "auto-aspect-from-a-portrait-reference",
+      "why": "'auto' is resolved from the reference's declared shape, by both the client that signs and the provider that prices. 1080x1920 is 9:16 exactly.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1080,
+          "height": 1920
+        },
+        "resolution": "1080p",
+        "aspect_ratio": "auto",
+        "duration": 5
+      },
+      "units_in": 2073600,
+      "units_out": 10368000
+    },
+    {
+      "name": "auto-aspect-is-scale-symmetric",
+      "why": "1280x720 and 1920x1080 are one shape. Comparing log-ratios is what makes the smaller reference choose the same row as the larger.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1280,
+          "height": 720
+        },
+        "resolution": "480p",
+        "aspect_ratio": "auto",
+        "duration": 2
+      },
+      "units_in": 921600,
+      "units_out": 819840
+    },
+    {
+      "name": "auto-aspect-without-a-reference-falls-back",
+      "why": "Nothing to measure, so the fallback decides — and it has to be a number, not an error, because a text-to-video request is a legitimate shape.",
+      "input": {
+        "prompt": "x",
+        "resolution": "720p",
+        "aspect_ratio": "auto",
+        "duration": 5
+      },
+      "units_in": 0,
+      "units_out": 4608000
+    },
+    {
+      "name": "an-absent-aspect-ratio-is-auto",
+      "why": "Same result as spelling it. The prevailing interface defaults the field, so a caller who omits it is asking for the same thing.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1280,
+          "height": 720
+        },
+        "resolution": "720p",
+        "duration": 5
+      },
+      "units_in": 921600,
+      "units_out": 4608000
+    },
+    {
+      "name": "explicit-pixels-beat-a-tier",
+      "why": "A caller who named pixels gets those pixels. The tier is a convenience, never an override.",
+      "input": {
+        "prompt": "x",
+        "resolution": "1080p",
+        "width": 640,
+        "height": 480,
+        "duration_secs": 3
+      },
+      "units_in": 0,
+      "units_out": 921600
+    },
+    {
+      "name": "a-reference-without-a-duration-is-an-image-edit",
+      "why": "No duration named, so nothing says video. This SDK cannot read a model's modality — GET /v1/models serves none — so the request's own shape is the whole of the signal, and asking for a clip means saying how long.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 512,
+          "height": 512
+        },
+        "resolution": "720p",
+        "aspect_ratio": "1:1"
+      },
+      "units_in": 262144,
+      "units_out": 921600
+    },
+    {
+      "name": "an-output-ceiling-keeps-a-request-text",
+      "why": "One shape decision drives both units. A request naming a token ceiling is token-metered on both sides, whatever else it carries — otherwise it would be priced as text out and as pixels in.",
+      "input": {
+        "prompt": "x",
+        "max_tokens": 256,
+        "width": 512,
+        "height": 512
+      },
+      "units_in": 14,
+      "units_out": 256
+    },
+    {
+      "name": "plain-text-is-untouched",
+      "why": "The overwhelming majority of orders. Canonical JSON is 17 bytes, one unit per four.",
+      "input": {
+        "input": "hello"
+      },
+      "units_in": 4,
+      "units_out": 4096
+    },
+    {
+      "name": "an-explicit-zero-output-survives",
+      "why": "An embedding buys no output side, and zero has to reach the order as zero rather than fall through to the default — the client would escrow an output leg the job can never spend.",
+      "input": {
+        "input": "hello"
+      },
+      "units_out_override": 0,
+      "units_in": 4,
+      "units_out": 0
+    },
+    {
+      "name": "an-override-does-not-change-the-input-side",
+      "why": "units_out is the caller's to state; units_in is derived from the request's shape either way.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1280,
+          "height": 720
+        },
+        "resolution": "720p",
+        "duration": 5
+      },
+      "units_out_override": 1000,
+      "units_in": 921600,
+      "units_out": 1000
+    },
+    {
+      "name": "a-tier-is-a-pixel-budget-not-a-height",
+      "why": "1:1 at 720p is 960x960, not 720x720: the same area as 1280x720, because that is what a model renders and what a per-second upstream charges for. A height-anchored square would buy barely half the pixels for the same upstream second.",
+      "input": {
+        "prompt": "x",
+        "resolution": "720p",
+        "aspect_ratio": "1:1",
+        "duration": 5
+      },
+      "units_in": 0,
+      "units_out": 4608000
+    },
+    {
+      "name": "four-k",
+      "why": "The top tier. 3840x2160 for fifteen seconds is 124416000, comfortably a uint32.",
+      "input": {
+        "prompt": "x",
+        "resolution": "4k",
+        "aspect_ratio": "16:9",
+        "duration": 15
+      },
+      "units_in": 0,
+      "units_out": 124416000
+    },
+    {
+      "name": "adaptive-is-priced-at-the-tiers-largest-frame",
+      "why": "The model keeps the reference's own shape, which no row names, so the cap is the largest frame the tier holds — 1472x632 at 720p — and the delivered clip settles under it.",
+      "input": {
+        "prompt": "x",
+        "image": {
+          "b64": "AA==",
+          "media_type": "image/png",
+          "width": 1000,
+          "height": 800
+        },
+        "resolution": "720p",
+        "aspect_ratio": "adaptive",
+        "duration": 5
+      },
+      "units_in": 800000,
+      "units_out": 4651520
+    },
+    {
+      "name": "auto-duration-is-priced-at-its-cap",
+      "why": "The model chooses the length; the order has to sign a number before it does. Fifteen seconds is the cap, and the seconds delivered are what settle.",
+      "input": {
+        "prompt": "x",
+        "resolution": "480p",
+        "aspect_ratio": "16:9",
+        "duration": "auto"
+      },
+      "units_in": 0,
+      "units_out": 6148800
+    },
+    {
+      "name": "reference-lists-sum-like-any-other-reference",
+      "why": "Character and style references arrive as lists. Each still is its pixels for a second and each clip its pixels for its length, exactly as the singular keys count.",
+      "input": {
+        "prompt": "x",
+        "reference_images": [
+          {
+            "b64": "AA==",
+            "media_type": "image/png",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "b64": "AA==",
+            "media_type": "image/jpeg",
+            "width": 512,
+            "height": 768
+          }
+        ],
+        "reference_videos": [
+          {
+            "b64": "AA==",
+            "media_type": "video/mp4",
+            "width": 854,
+            "height": 480,
+            "duration_secs": 3
+          }
+        ],
+        "resolution": "720p",
+        "aspect_ratio": "16:9",
+        "duration": 5
+      },
+      "units_in": 2671552,
+      "units_out": 4608000
+    },
+    {
+      "name": "an-audio-reference-counts-zero",
+      "why": "Sound has no pixels and nothing meters it. It must not be mistaken for a reference that decides the frame's shape, either: with only audio to look at, 'auto' falls back.",
+      "input": {
+        "prompt": "x",
+        "reference_audios": [
+          {
+            "b64": "AA==",
+            "media_type": "audio/mpeg"
+          }
+        ],
+        "resolution": "720p",
+        "aspect_ratio": "auto",
+        "duration": 5
+      },
+      "units_in": 0,
+      "units_out": 4608000
+    },
+    {
+      "name": "auto-reads-the-first-listed-reference-when-no-singular-one-is-given",
+      "why": "The singular keys come first, then reference_images, then reference_videos. A portrait character sheet with no start frame still shapes the clip.",
+      "input": {
+        "prompt": "x",
+        "reference_images": [
+          {
+            "b64": "AA==",
+            "media_type": "image/png",
+            "width": 720,
+            "height": 1280
+          }
+        ],
+        "resolution": "480p",
+        "duration": 4
+      },
+      "units_in": 921600,
+      "units_out": 1639680
+    }
+  ]
+}

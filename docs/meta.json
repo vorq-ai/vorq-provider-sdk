@@ -1,0 +1,12 @@
+{
+  "title": "Provider daemon",
+  "icon": "Server",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "guides",
+    "concepts",
+    "reference"
+  ]
+}

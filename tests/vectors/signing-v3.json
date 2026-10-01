@@ -1,0 +1,1011 @@
+{
+  "format": "vorq-signing-v3",
+  "generated_by": "vorq-evm-contracts/test/Vectors.t.sol",
+  "chain_id": 84532,
+  "addresses": {
+    "job_registry": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "provider_registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "ask_registry": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+    "payment_token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+  },
+  "domains": {
+    "job_registry": {
+      "domain": {
+        "name": "VORQ Jobs",
+        "version": "2",
+        "chainId": 84532,
+        "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+      },
+      "separator": "0x3f0c928d3c1e283abf4a1c86884de6c9c2d0f759a41f4b1e5482f2973768ff4d"
+    },
+    "provider_registry": {
+      "domain": {
+        "name": "VORQ Providers",
+        "version": "2",
+        "chainId": 84532,
+        "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+      },
+      "separator": "0x658bbff2a7ebb3ee7b873c8ba58ad71be7725121a9c7aeeefc1e9ca6bf736bf6"
+    },
+    "ask_registry": {
+      "domain": {
+        "name": "VORQ Asks",
+        "version": "2",
+        "chainId": 84532,
+        "verifyingContract": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+      },
+      "separator": "0x34403373200657cdf69c74725c5f11c0633eb1baefccc1af2922252e18153078"
+    },
+    "payment_token": {
+      "domain": {
+        "name": "USDC",
+        "version": "2",
+        "chainId": 84532,
+        "verifyingContract": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      },
+      "separator": "0x71f17a3b2ff373b803d70a5a07c046c1a2bc8e89c09ef722fcb047abe94c9818"
+    },
+    "escrow": {
+      "domain": {
+        "name": "VORQ Escrow",
+        "version": "1",
+        "chainId": 84532
+      },
+      "separator": null
+    },
+    "session": {
+      "domain": {
+        "name": "VORQ Session",
+        "version": "1",
+        "chainId": 84532
+      },
+      "separator": null
+    }
+  },
+  "cases": [
+    {
+      "name": "order-designated",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Order": [
+            {
+              "name": "c",
+              "type": "bytes32"
+            },
+            {
+              "name": "modelId",
+              "type": "uint32"
+            },
+            {
+              "name": "slaSecs",
+              "type": "uint32"
+            },
+            {
+              "name": "rateIn",
+              "type": "uint128"
+            },
+            {
+              "name": "rateOut",
+              "type": "uint128"
+            },
+            {
+              "name": "unitsIn",
+              "type": "uint32"
+            },
+            {
+              "name": "unitsOut",
+              "type": "uint32"
+            },
+            {
+              "name": "designated",
+              "type": "uint32"
+            },
+            {
+              "name": "expiresAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Order",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "c": "0xef1815ef5d6b0fc3e7efed1f823424236e5a273e2154c98ec2cdfd744de139b5",
+          "modelId": 1,
+          "slaSecs": 3600,
+          "rateIn": "30000",
+          "rateOut": "90000",
+          "unitsIn": 1000,
+          "unitsOut": 2000,
+          "designated": 1,
+          "expiresAt": 1800003600
+        }
+      },
+      "digest": "0x83433a400a0c09286078f4ad9d17b4e72ea7f944ce29e7192605992bfa517ab6",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0x14e7969b4dbce17c9ec96782d8fd65668ad9013f02f9bed50531b71f6da567374a1b0747cf01b5547bb9087d91b4efa549d3d8f3e88500146978a8aff6f6484c1b",
+      "extra": {
+        "owner": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+        "job_id": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+        "task_cid": "0x62616679766f7271766563746f72737461736b63696430303031",
+        "task_cid_utf8": "bafyvorqvectorstaskcid0001"
+      }
+    },
+    {
+      "name": "order-open",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Order": [
+            {
+              "name": "c",
+              "type": "bytes32"
+            },
+            {
+              "name": "modelId",
+              "type": "uint32"
+            },
+            {
+              "name": "slaSecs",
+              "type": "uint32"
+            },
+            {
+              "name": "rateIn",
+              "type": "uint128"
+            },
+            {
+              "name": "rateOut",
+              "type": "uint128"
+            },
+            {
+              "name": "unitsIn",
+              "type": "uint32"
+            },
+            {
+              "name": "unitsOut",
+              "type": "uint32"
+            },
+            {
+              "name": "designated",
+              "type": "uint32"
+            },
+            {
+              "name": "expiresAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Order",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "c": "0x8c4f472c5651b196e8a101db8795d1bd0c29c31403dcbe30969788b6794fa780",
+          "modelId": 1,
+          "slaSecs": 86400,
+          "rateIn": "1",
+          "rateOut": "1",
+          "unitsIn": 1,
+          "unitsOut": 1,
+          "designated": 0,
+          "expiresAt": 1800086400
+        }
+      },
+      "digest": "0xa227536dc086b9daff1ef0c4baa892ec204ceaa233977a565bed568a51314a65",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0xdf783d69a4818e0ec6b38ae77b57533376fd2d18f12977081f110e5c6a86a531794720a29232499ccc5157b9111e0de5d08e301aee8915a6ff9be29b088732e71c",
+      "extra": {
+        "owner": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+        "job_id": "0x24e56989783345bc14ed5340dd6b79302d72463182d9cb82219191751808286a",
+        "task_cid": "0x62616679766f7271766563746f72737461736b63696430303032",
+        "task_cid_utf8": "bafyvorqvectorstaskcid0002"
+      }
+    },
+    {
+      "name": "cancel",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Cancel": [
+            {
+              "name": "jobId",
+              "type": "bytes32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Cancel",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0x3f5050532e9d3e51301e403228792e83b588f6fd814575e28b3faddf90391abb",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0x9935c969c3df23dab842387b9067d13e79d5be585ba32c5c9d46255ad305b35566bd097a42f7f588968cfef60b6dcc4d78bb9b4dd1d7dd63b71c1d1a1d9699341c"
+    },
+    {
+      "name": "payment-authorization",
+      "domain": "payment_token",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "ReceiveWithAuthorization": [
+            {
+              "name": "from",
+              "type": "address"
+            },
+            {
+              "name": "to",
+              "type": "address"
+            },
+            {
+              "name": "value",
+              "type": "uint256"
+            },
+            {
+              "name": "validAfter",
+              "type": "uint256"
+            },
+            {
+              "name": "validBefore",
+              "type": "uint256"
+            },
+            {
+              "name": "nonce",
+              "type": "bytes32"
+            }
+          ]
+        },
+        "primaryType": "ReceiveWithAuthorization",
+        "domain": {
+          "name": "USDC",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+        },
+        "message": {
+          "from": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+          "to": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+          "value": "30212",
+          "validAfter": "0",
+          "validBefore": "1800003601",
+          "nonce": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40"
+        }
+      },
+      "digest": "0x2b7263b0ff3020670f13a059e0fc6d896edd26032eed9344854e45f279bbb616",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0x167d3c0aeceaf3ba175267cfeafa431d647c5ca8d17c0c14d98ab7ba1168c2764af043ec88f9df304ca2e3f11ed7458acdd1a643b07b107d2d977ecc9c474c401c",
+      "extra": {
+        "job_id": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+        "amount": "30212"
+      }
+    },
+    {
+      "name": "claim",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Claim": [
+            {
+              "name": "jobId",
+              "type": "bytes32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Claim",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xde48afcd388bd3582c6c178b85d36ef841e258b2bc2b64cbe18bf0a0514118fe",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0x2ea7653ca22cd347fc035e0f23b345922e58a28868d7911eed9701a19b3de54018bfc76ef652441bfbaa093c9530065af0fb38050c116adc2c75072497c1e5651b"
+    },
+    {
+      "name": "settle",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Settle": [
+            {
+              "name": "jobId",
+              "type": "bytes32"
+            },
+            {
+              "name": "completionTok",
+              "type": "uint32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Settle",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "completionTok": 1500,
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0x203ed641f5fd465863326b64687e4bdf8159bd8b63985e9a185424d8859677b0",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0xb9ca439e6f70458683eac55f448cacec7af5089a061ae5533d1594c12fbe2bec62cb2d7ee7896952f43823dfc533b1680fdb5ad798cffb0ef7d1753b3a53186d1b"
+    },
+    {
+      "name": "fail",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Fail": [
+            {
+              "name": "jobId",
+              "type": "bytes32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Fail",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xda016205936786e2c1f1a8e5e5b959c7d35febe8e940889d420e5b4d92911d17",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0xcbac9fc809c3b101db66f1282d3d715405b50d5909f3a5b136d94fdd992b025308cd3571d195e9ca948b6cdec1202689bbcc34c8c52f4cc7ce7da31b4e52780b1c"
+    },
+    {
+      "name": "set-identity",
+      "domain": "provider_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "SetIdentity": [
+            {
+              "name": "boxKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "evidence",
+              "type": "bytes"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "SetIdentity",
+        "domain": {
+          "name": "VORQ Providers",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+        },
+        "message": {
+          "boxKey": "0x2ff6be44f4c8b0b6e3fe1c22bbe4d1e5cbe4b3a5f9d0c17e2a68b4d3907c5e11",
+          "evidence": "0x6d6f636b2d70726f76696465722d76313a6465766e65742d6174746573746174696f6e2d30",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0x5c5dacd019e9a715e9c63dec470e394b2d69a81449a6f86f29fa76ea6467a3d0",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0x6c208c6cbaebf8523654e01b00c8a24d96f004fd1ef9607382c943f17420ed684a653b3413513c13b51e7189bb617bfc4792e733cf01e9ffa683e74f7288a3691c",
+      "extra": {
+        "evidence_hash": "0x027bcfd7a8d15d5f873b36282155298b9e4f88290182315c3ae835e6907bcc9e",
+        "evidence_bytes": 37
+      }
+    },
+    {
+      "name": "set-identity-empty-evidence",
+      "domain": "provider_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "SetIdentity": [
+            {
+              "name": "boxKey",
+              "type": "bytes32"
+            },
+            {
+              "name": "evidence",
+              "type": "bytes"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "SetIdentity",
+        "domain": {
+          "name": "VORQ Providers",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+        },
+        "message": {
+          "boxKey": "0x2ff6be44f4c8b0b6e3fe1c22bbe4d1e5cbe4b3a5f9d0c17e2a68b4d3907c5e11",
+          "evidence": "0x",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0x188e3b27f60cf8243328680af99fe25a97ba7a7fcaecb1a04ddbd13864610d71",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0xf0ba6a17bb9ddd335ca50cfcb0933b2ce8b12e526882d29bdae591ff21c71d062c363ce7ae6f4c285c5038041d1457b6f5fd558f95a6353c3a5f6f3171c0fd141c",
+      "extra": {
+        "evidence_hash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "evidence_bytes": 0
+      }
+    },
+    {
+      "name": "request-capacity",
+      "domain": "provider_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "RequestCapacity": [
+            {
+              "name": "n",
+              "type": "uint32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "RequestCapacity",
+        "domain": {
+          "name": "VORQ Providers",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+        },
+        "message": {
+          "n": 8,
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xbdc0041dc284eafe6b0f70bfccc10cff7f86607fb4562774746c05b4cc4845cd",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0xd87e145c2214e9efc7d028ff90c5c5bb109ec4bf671c0c557e19d64a03410ce8601b5a8e4430cb094d5b064737d3a19c3cb0172ec6d454258fcabaee0af1c21f1c"
+    },
+    {
+      "name": "ask-snapshot",
+      "domain": "ask_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "AskSnapshot": [
+            {
+              "name": "providerId",
+              "type": "uint32"
+            },
+            {
+              "name": "signedAt",
+              "type": "uint64"
+            },
+            {
+              "name": "quotes",
+              "type": "Ask[]"
+            }
+          ],
+          "Ask": [
+            {
+              "name": "modelId",
+              "type": "uint32"
+            },
+            {
+              "name": "sla",
+              "type": "uint32"
+            },
+            {
+              "name": "rateIn",
+              "type": "uint128"
+            },
+            {
+              "name": "rateOut",
+              "type": "uint128"
+            }
+          ]
+        },
+        "primaryType": "AskSnapshot",
+        "domain": {
+          "name": "VORQ Asks",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+        },
+        "message": {
+          "providerId": 1,
+          "signedAt": 1800000000,
+          "quotes": [
+            {
+              "modelId": 1,
+              "sla": 3600,
+              "rateIn": "30000",
+              "rateOut": "90000"
+            },
+            {
+              "modelId": 1,
+              "sla": 86400,
+              "rateIn": "0",
+              "rateOut": "0"
+            },
+            {
+              "modelId": 2,
+              "sla": 86400,
+              "rateIn": "1",
+              "rateOut": "0"
+            }
+          ]
+        }
+      },
+      "digest": "0xd4d7d07f2cbd58e71b2bbacecb54ace5e30e320468870863da157a29d9507447",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0x8d54a0332863e58c5815ea8869d6b7d1afc570af940703d8ebe108cd276a469f045805c5878d4bd818748f9ee7119badb7aea410f9bc54929cb9a536ac4016c21b"
+    },
+    {
+      "name": "ask-snapshot-empty",
+      "domain": "ask_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "AskSnapshot": [
+            {
+              "name": "providerId",
+              "type": "uint32"
+            },
+            {
+              "name": "signedAt",
+              "type": "uint64"
+            },
+            {
+              "name": "quotes",
+              "type": "Ask[]"
+            }
+          ],
+          "Ask": [
+            {
+              "name": "modelId",
+              "type": "uint32"
+            },
+            {
+              "name": "sla",
+              "type": "uint32"
+            },
+            {
+              "name": "rateIn",
+              "type": "uint128"
+            },
+            {
+              "name": "rateOut",
+              "type": "uint128"
+            }
+          ]
+        },
+        "primaryType": "AskSnapshot",
+        "domain": {
+          "name": "VORQ Asks",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+        },
+        "message": {
+          "providerId": 1,
+          "signedAt": 1800000000,
+          "quotes": []
+        }
+      },
+      "digest": "0x0d1467d14d4f75a57a0a8dedcb8f3cad1b13989df5d6b49bb2a9870fd838b64d",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0x8b54f08eea6bf599cc3192b97a331f8e204155ab7eeb0f2ff0f7b753a875a7251302f8d35bbb3b8ffe31422a64ed6bd3f4c0c736973947ad74539c1174a4ec311c"
+    },
+    {
+      "name": "release",
+      "domain": "escrow",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            }
+          ],
+          "Release": [
+            {
+              "name": "jobId",
+              "type": "bytes32"
+            },
+            {
+              "name": "seedWrap",
+              "type": "bytes"
+            },
+            {
+              "name": "ctHash",
+              "type": "bytes32"
+            },
+            {
+              "name": "responsePubkey",
+              "type": "bytes32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Release",
+        "domain": {
+          "name": "VORQ Escrow",
+          "version": "1",
+          "chainId": 84532
+        },
+        "message": {
+          "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "seedWrap": "0x766f72712d64656b2d777261702d766563746f722d30303031",
+          "ctHash": "0x8c4f472c5651b196e8a101db8795d1bd0c29c31403dcbe30969788b6794fa780",
+          "responsePubkey": "0x2ff6be44f4c8b0b6e3fe1c22bbe4d1e5cbe4b3a5f9d0c17e2a68b4d3907c5e11",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xe02a73780f13a93f3c7e7eb0a267cd049a018c499df5cfee37615063ea2bd9f6",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0xbe91ffe47de11a0058854b90dfb16293a590bd0300e680c51b770609d0b84e766b224ae197c93c749bc70dbab32579206d55e0a4d948a4fb713cf61a301b38b61c"
+    },
+    {
+      "name": "handover-auth",
+      "domain": "escrow",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            }
+          ],
+          "HandoverAuth": [
+            {
+              "name": "channelPubkey",
+              "type": "bytes32"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "HandoverAuth",
+        "domain": {
+          "name": "VORQ Escrow",
+          "version": "1",
+          "chainId": 84532
+        },
+        "message": {
+          "channelPubkey": "0x2ff6be44f4c8b0b6e3fe1c22bbe4d1e5cbe4b3a5f9d0c17e2a68b4d3907c5e11",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xee7b1630a2e7d4f32e3e5fb93bbe315b8ab3d88acca8dd83c98cf56693d154e7",
+      "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "signature": "0x6c3f61765ffaa44657592f9800be54103e44513cf3514376aa8fc188ff4ff4935318320e911d8148b2d48160c8faec488f82b4e5a5c439bc21e254138a5b63921b"
+    },
+    {
+      "name": "session",
+      "domain": "session",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            }
+          ],
+          "VorqSession": [
+            {
+              "name": "address",
+              "type": "address"
+            },
+            {
+              "name": "nonce",
+              "type": "string"
+            }
+          ]
+        },
+        "primaryType": "VorqSession",
+        "domain": {
+          "name": "VORQ Session",
+          "version": "1",
+          "chainId": 84532
+        },
+        "message": {
+          "address": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+          "nonce": "vorq-session-nonce-0001"
+        }
+      },
+      "digest": "0xc5acacb9bc5dfde1150d8d4ddbd11a1badbdcd378a5c1c69d77c8b20b72b97d6",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0x91ef95fda3b7df0feb0985f24ec38fd4b03cf902ea3fd78b6ca106c9b69b7c79496a9095230ae6033e5876b4f310657f7e60bb4ecbe2b643476ca5c1e52ce74b1c"
+    }
+  ]
+}

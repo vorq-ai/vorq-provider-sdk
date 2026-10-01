@@ -1,0 +1,16 @@
+{
+  "title": "Guides",
+  "pages": [
+    "connect-an-openai-compatible-backend",
+    "map-a-queue-style-api",
+    "serve-responses-and-batch-endpoints",
+    "serve-image-and-video-models",
+    "set-prices",
+    "respect-backend-rate-limits",
+    "deploy-with-docker",
+    "monitor-the-daemon",
+    "stop-and-restart-safely",
+    "rotate-keys",
+    "run-a-confidential-provider"
+  ]
+}
