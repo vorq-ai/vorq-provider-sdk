@@ -57,6 +57,7 @@ from .container import (ContainerError, ciphertext_hash, derive_dek, sealed_plai
 from .errors import (
     BackendError,
     BackendExhausted,
+    BackendGone,
     ChainConflict,
     ConfigError,
     DeadlineExceeded,
@@ -71,6 +72,7 @@ from .escrow import ESCROW_KEY_LOST, EscrowRelease, ReleaseRefused
 from .limits import Breaker, RetryPolicy, Throttle, retry_delay
 from .money import format_usd, parse_usd
 from .node import ModelResolver
+from .ops import report_job_failed
 from .opsig import OpSigner
 from .pricing import (
     MAX_FLOOR_DISCOUNT_PCT,
@@ -111,9 +113,10 @@ def _backend_at_fault(exc: BackendError) -> bool:
     Exhausted retries are the backend failing every attempt. A deadline spent
     on failed attempts chains the last one (``raise ... from exc``); one spent
     waiting on the throttle chains nothing and is this daemon's own quota. A
-    non-retryable refusal is the job's input, not the backend.
+    404 or 410 is an endpoint that is not there, whatever the job asked. Any
+    other non-retryable refusal is the job's input, not the backend.
     """
-    if isinstance(exc, BackendExhausted):
+    if isinstance(exc, (BackendExhausted, BackendGone)):
         return True
     if isinstance(exc, DeadlineExceeded):
         return isinstance(exc.__cause__, BackendError)
@@ -1414,8 +1417,13 @@ class Scheduler:
         """
         log.warning("refusing claimed job (%s): %s", reason, detail,
                     extra={"job_id": job.job_id, "penalty_free": self._within_fail_grace(job)})
-        self._metrics.on_fail(reason)
+        self._failed(job, reason, detail)
         await self._report_fail(job, reason)
+
+    def _failed(self, job, reason: str, detail: str = "") -> None:
+        """Count a job this daemon gave back, and report it to Sentry under its model."""
+        self._metrics.on_fail(reason)
+        report_job_failed(job.model, reason, job.job_id, detail)
 
     def _within_fail_grace(self, job) -> bool:
         """Is a fail for this job still penalty-free?
@@ -1546,7 +1554,7 @@ class Scheduler:
 
             if not self._within_sla(job):
                 log.warning("abandoned (SLA)", extra={"job_id": job.job_id, "model": model.model})
-                self._metrics.on_fail("sla_abandon")
+                self._failed(job, "sla_abandon")
                 return
 
             result_bytes, completion_tokens = await self._build_result(
@@ -1603,13 +1611,13 @@ class Scheduler:
                 # that margin is the trade; a daemon that loses this race
                 # routinely has its margin set too low for the outputs it serves.
                 log.warning("settle refused (%s)", exc.reason, extra={"job_id": job.job_id})
-                self._metrics.on_fail(f"settle_{exc.reason}")
+                self._failed(job, f"settle_{exc.reason}")
                 return
             except OpRejected as exc:
                 # The registries did not recognise the signer. The work is done
                 # and cannot be delivered, so hand the job back for a refund.
                 log.warning("settle rejected: %s", exc, extra={"job_id": job.job_id})
-                self._metrics.on_fail("settle_rejected")
+                self._failed(job, "settle_rejected")
                 await self._report_fail(job, "settle_rejected")
                 return
             except UploadInvalid as exc:
@@ -1619,7 +1627,7 @@ class Scheduler:
                 # cannot be delivered, so hand the job back rather than leave it
                 # claimed until the reclaim.
                 log.warning("job not settled: %s", exc, extra={"job_id": job.job_id})
-                self._metrics.on_fail("settle_upload_invalid")
+                self._failed(job, "settle_upload_invalid")
                 await self._report_fail(job, "settle_upload_invalid")
                 return
             except httpx.HTTPError as exc:
@@ -1633,7 +1641,7 @@ class Scheduler:
                 # refunded, and if it was not, the reclaim is the fallback either way.
                 reason, detail = self._settle_failure(exc, len(result_bytes))
                 log.warning("job not settled: %s", detail, extra={"job_id": job.job_id})
-                self._metrics.on_fail(reason)
+                self._failed(job, reason, detail)
                 await self._report_fail(job, reason)
                 return
             if not self._landed(answer, "settle", job.job_id):
@@ -1649,7 +1657,7 @@ class Scheduler:
                 # slot. `_report_fail` is best-effort — if the job was reclaimed
                 # under us the fail is refused in turn and swallowed there, and
                 # the reclaim has already done the same job.
-                self._metrics.on_fail("settle_reverted")
+                self._failed(job, "settle_reverted")
                 await self._report_fail(job, "settle_reverted")
                 return
             self._metrics.on_settle(self._clock() - started)
@@ -1669,6 +1677,8 @@ class Scheduler:
                 reason = "deadline_wait"
             elif isinstance(exc, BackendExhausted):
                 reason = "backend_exhausted"
+            elif isinstance(exc, BackendGone):
+                reason = "backend_gone"
             elif isinstance(exc, MediaInputRefused):
                 # Its own label because it is its own thing: not a backend that
                 # misbehaved but a reference the client declared smaller than it
@@ -1679,7 +1689,7 @@ class Scheduler:
                 reason = "media_input_refused"
             else:
                 reason = "backend_error"
-            self._metrics.on_fail(reason)
+            self._failed(job, reason, str(exc))
             if _backend_at_fault(exc) and self._breakers[model.model].record_failure():
                 await self._withdraw_tripped(model.model)
             await self._report_fail(job, str(exc))

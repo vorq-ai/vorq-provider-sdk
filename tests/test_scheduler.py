@@ -30,6 +30,7 @@ from vorqd.backend import ENVELOPE_SLACK_BYTES, input_shortfall
 from vorqd.container import MIN_CONTAINER_BYTES, derive_dek, sealed_plaintext_bytes
 from vorqd.errors import (
     BackendError,
+    BackendGone,
     ChainConflict,
     ConfigError,
     OpRefused,
@@ -1242,6 +1243,41 @@ async def test_one_fault_after_relist_retrips_and_a_success_closes_it():
     assert ok.state == "Settled"
     assert sched._breakers[MODEL].streak == 0
     assert chain.published == [MODEL]
+
+
+class GoneDriver(FailingDriver):
+    """A backend whose endpoint answers 404: every job fails at once, unretried."""
+
+    async def run(self, job, input, *, timeout_s=None):
+        self.calls += 1
+        raise BackendGone("the backend answered HTTP 404: the endpoint is not there")
+
+
+async def test_an_endpoint_that_is_gone_trips_the_breaker():
+    """Each job is refused once and never retried, and three of them still take
+    the model off the book — a 404 is the backend's fault, not the job's."""
+    clock, chain, metrics, driver, sched = _tripping(3, driver=GoneDriver(), retries=4)
+    await sched.run_once()
+    await sched.join()
+    assert driver.calls == 3
+    assert metrics.fails == ["backend_gone"] * 3
+    assert chain.published == []
+    assert sched._breakers[MODEL].tripped()
+
+
+async def test_every_failed_job_is_reported_under_its_model(monkeypatch):
+    """The Sentry report rides the same call that counts the failure, so the two
+    cannot disagree: one report per failed job, named by model and reason."""
+    reported = []
+    monkeypatch.setattr("vorqd.scheduler.report_job_failed",
+                        lambda model, reason, job_id, detail="": reported.append((model, reason, job_id, detail)))
+    clock, chain, metrics, driver, sched = _tripping(2, trip_after=0, driver=GoneDriver())
+    await sched.run_once()
+    await sched.join()
+    assert metrics.fails == ["backend_gone"] * 2
+    assert sorted(r[:2] for r in reported) == [(MODEL, "backend_gone")] * 2
+    assert {r[2] for r in reported} == {j.job_id for j in chain._jobs.values()}
+    assert all("HTTP 404" in r[3] for r in reported)
 
 
 async def test_a_refusal_and_a_throttle_deadline_are_not_backend_faults():

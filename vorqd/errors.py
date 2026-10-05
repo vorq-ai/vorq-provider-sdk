@@ -122,6 +122,21 @@ class BackendExhausted(BackendError):
     """Every configured attempt failed retryably; the job is given back."""
 
 
+class BackendGone(BackendError):
+    """The backend answered 404 or 410: what this entry points at is not there.
+
+    Never retryable — the job is failed back at once — but it is the backend's
+    fault and not the job's, so it counts toward the circuit breaker. A model
+    the host has withdrawn, or whose gateway is away, answers every job this
+    way; without the count its ask would stand and every claim would fail.
+    An entry that knows its gateway comes and goes lists 404 in
+    ``retry_statuses`` instead, and the retries are what it then exhausts.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, retryable=False)
+
+
 class DeadlineExceeded(BackendError):
     """The next wait or attempt would end past the job's SLA deadline."""
 

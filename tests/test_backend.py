@@ -13,7 +13,7 @@ from vorqd.backend import (BackendDriver, DEFAULT_DIM, ENVELOPE_SLACK_BYTES, Nor
                            responses_to_chat)
 from vorqd.types import EvmJob
 from vorqd.config import BackendConfig
-from vorqd.errors import BackendError
+from vorqd.errors import BackendError, BackendGone
 
 
 def text_job():
@@ -1267,6 +1267,19 @@ async def test_a_streamed_request_classifies_statuses_like_a_plain_one():
 
     with pytest.raises(BackendError, match="HTTP 400") as info:
         await _stream_driver(refused).run(text_job(), {"messages": []})
+    assert not info.value.retryable
+    assert not isinstance(info.value, BackendGone)
+
+
+@pytest.mark.parametrize("status", [404, 410])
+async def test_an_endpoint_that_is_not_there_is_gone_not_refused(status):
+    """A 404 or 410 fails the job at once like any refusal, but as its own kind:
+    the scheduler counts it against the backend, where a 400 is the job's."""
+    def gone(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=b"")
+
+    with pytest.raises(BackendGone, match=f"HTTP {status}") as info:
+        await _stream_driver(gone).run(text_job(), {"messages": []})
     assert not info.value.retryable
 
 

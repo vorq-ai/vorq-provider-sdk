@@ -33,6 +33,7 @@ sends a signed `fail`, which refunds the client immediately.
 |---|---|
 | `backend_error` | The backend refused the job (a non-retryable error). |
 | `backend_exhausted` | Every attempt failed. |
+| `backend_gone` | The backend answered `404` or `410`: the endpoint is not there. Not retried. |
 | `deadline_wait` | The next wait or attempt would end past the SLA margin. |
 | `media_input_refused` | A media request or reference did not fit what was paid for or what the backend takes. |
 | `sla_abandon` | The backend finished after the SLA margin. No `fail` is sent; the job is left to be reclaimed. |

@@ -23,7 +23,7 @@ import httpx
 from . import media, media_units
 from ._templates import extract, parse_path, render, resolves
 from .config import BackendConfig
-from .errors import BackendError, MediaInputRefused
+from .errors import BackendError, BackendGone, MediaInputRefused
 from .limits import parse_retry_after, window_seconds
 from .reasoning import budget_for_effort
 
@@ -1484,6 +1484,9 @@ class BackendDriver:
                         retry_after_s, url, text)
             raise BackendError("the backend throttled the request with HTTP 429",
                                retryable=True, retry_after_s=retry_after_s)
+        if status in (404, 410):
+            log.warning("backend gone (HTTP %s): %s — %s", status, url, text)
+            raise BackendGone(f"the backend answered HTTP {status}: the endpoint is not there")
         if status >= 400:
             log.warning("backend refused (HTTP %s): %s — %s", status, url, text)
             raise BackendError(f"the backend refused the request with HTTP {status}")

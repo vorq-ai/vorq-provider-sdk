@@ -129,3 +129,41 @@ def test_configure_logging_sets_json_handler():
     logger = configure_logging("debug")
     assert logger.level == logging.DEBUG
     assert any(isinstance(h.formatter, JsonFormatter) for h in logger.handlers)
+
+
+# --- failed jobs in Sentry: one issue per model ----------------------------------
+
+
+@pytest.fixture
+def sentry_events():
+    """Events the SDK would have sent, caught at `before_send` and dropped there."""
+    import sentry_sdk
+
+    events = []
+    sentry_sdk.init(dsn="https://key@sentry.invalid/1",
+                    before_send=lambda event, hint: events.append(event))
+    yield events
+    sentry_sdk.init(dsn="")
+
+
+def test_failed_jobs_on_one_model_share_a_fingerprint_whatever_the_reason(sentry_events):
+    from vorqd.ops import report_job_failed
+
+    report_job_failed("acme/alpha", "backend_gone", "0xaa", "the backend answered HTTP 404")
+    report_job_failed("acme/alpha", "backend_exhausted", "0xbb")
+    report_job_failed("acme/beta", "backend_gone", "0xcc")
+
+    alpha_gone, alpha_exhausted, beta = sentry_events
+    assert alpha_gone["fingerprint"] == alpha_exhausted["fingerprint"] == ["job-failed", "acme/alpha"]
+    assert beta["fingerprint"] == ["job-failed", "acme/beta"]
+    assert alpha_gone["level"] == "error"
+    assert alpha_gone["tags"] == {"model": "acme/alpha", "reason": "backend_gone", "job_id": "0xaa"}
+    assert alpha_gone["extra"]["detail"] == "the backend answered HTTP 404"
+    assert "detail" not in alpha_exhausted.get("extra", {})
+
+
+def test_reporting_a_failed_job_without_a_dsn_sends_nothing():
+    from vorqd.ops import report_job_failed
+
+    report_job_failed("acme/alpha", "backend_gone", "0xaa")   # no client: must not raise
+

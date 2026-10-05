@@ -191,3 +191,24 @@ def configure_error_reporting() -> None:
         trace_propagation_targets=[],
         integrations=[AsyncioIntegration()],
     )
+
+
+def report_job_failed(model: str, reason: str, job_id: str, detail: str = "") -> None:
+    """One Sentry event for a job the daemon gave back, grouped by model.
+
+    The fingerprint is the model and nothing else, so every failure on one
+    model lands in one issue whatever the reason or the wording — the reason,
+    which is the ``vorqd_jobs_failed_total`` label, and the job id are tags to
+    filter that issue by. ``detail`` is the daemon's own account of the failure
+    and never the client's payload. A no-op without ``SENTRY_DSN``.
+    """
+    import sentry_sdk
+
+    with sentry_sdk.new_scope() as scope:
+        scope.fingerprint = ["job-failed", model]
+        scope.set_tag("model", model)
+        scope.set_tag("reason", reason)
+        scope.set_tag("job_id", job_id)
+        if detail:
+            scope.set_extra("detail", detail)
+        sentry_sdk.capture_message(f"job failed on {model}: {reason}", level="error")

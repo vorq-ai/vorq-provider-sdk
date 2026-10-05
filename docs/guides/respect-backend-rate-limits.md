@@ -65,7 +65,8 @@ Size `retries` and `retry_backoff_max_s` against the shortest SLA window the mod
 After `trip_after` consecutive jobs fail with the backend at fault (default `3`), the model's
 asks are withdrawn at once and it is offered nothing. After `trip_cooldown_s` (default `60`)
 it is listed again, provided its health check passes. One more fault withdraws it again; one
-job the backend completes resets the count. A `4xx` refusal does not count.
+job the backend completes resets the count. A `404` or `410` counts, because the endpoint is
+not there whatever the job asked; any other `4xx` refusal does not.
 `trip_after: 0` disables this.
 
 ## Let capacity follow the limits
