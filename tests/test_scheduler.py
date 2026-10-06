@@ -2354,6 +2354,105 @@ async def test_a_settle_that_never_reaches_the_network_is_reported_too():
     assert metrics.fails == ["settle_transport_error"]
 
 
+def _status_error(status, code=None):
+    req = httpx.Request("POST", "http://x/evm/ops")
+    body = {"error": {"code": code}} if code else {}
+    return httpx.HTTPStatusError("refused", request=req,
+                                 response=httpx.Response(status, request=req, json=body))
+
+
+@pytest.mark.parametrize("first", [
+    (lambda: _status_error(503)),     # the node could not file or relay it
+    (lambda: _status_error(429)),     # the node is busy
+    (lambda: _status_error(504)),     # broadcast, no receipt in time
+    (lambda: httpx.ConnectError("refused", request=httpx.Request("POST", "http://x/evm/ops"))),
+    (lambda: OpRefused("StaleOp")),   # the stamp aged out on the way
+    (lambda: OpResult(tx_hash="0x" + "22" * 32, status="reverted", block_number=2)),
+])
+async def test_a_settle_the_node_could_not_relay_is_sent_again(first):
+    # The work is done and the node is the only route to the chain: a failure to
+    # relay is waited out, never answered by refunding the client.
+    clock = Clock()
+    job = open_text_job("retried")
+
+    class FlakyNode(FakeNode):
+        tries = 0
+
+        async def push_op(self, op, payload, signature):
+            if op == "settle":
+                self.tries += 1
+                if self.tries == 1:
+                    self.ops.append((op, dict(payload), signature))
+                    outcome = first()
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+            return await super().push_op(op, payload, signature)
+
+    chain = FlakyNode([job], clock)
+    metrics = FakeMetrics()
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock, metrics)
+    await sched.run_once()
+    await sched.join()
+
+    assert job.state == "Settled" and metrics.settles == 1
+    assert chain.failed == [] and metrics.fails == []      # the job was never given back
+    first_try, second_try = chain.pushed("settle")
+    assert second_try["issued_at"] > first_try["issued_at"]   # stamped, and so signed, afresh
+    assert sched.sleeps == [5.0]
+
+
+async def test_a_settle_naming_an_upload_the_node_dropped_uploads_it_again():
+    clock = Clock()
+    job = open_text_job("swept_upload")
+
+    class SweptNode(FakeNode):
+        tries = 0
+
+        async def push_op(self, op, payload, signature):
+            if op == "settle":
+                self.tries += 1
+                if self.tries == 1:
+                    raise _status_error(400, "unknown_result")
+            return await super().push_op(op, payload, signature)
+
+    chain = SweptNode([job], clock)
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
+    big = b"x" * (INLINE_MAX_BYTES + 1)
+
+    async def fake_build_result(job, normalized, result_key, custom_id=None):
+        return big, 1
+
+    sched._build_result = fake_build_result
+    await sched.run_once()
+    await sched.join()
+
+    assert chain.uploaded == [("result", big), ("result", big)]
+    assert job.state == "Settled" and chain.failed == []
+
+
+async def test_a_settle_the_node_never_relays_is_handed_back_when_the_sla_closes():
+    clock = Clock()
+    job = open_text_job("node_down")
+
+    class DownNode(FakeNode):
+        async def push_op(self, op, payload, signature):
+            if op == "settle":
+                raise _status_error(503)
+            return await super().push_op(op, payload, signature)
+
+    chain = DownNode([job], clock)
+    metrics = FakeMetrics()
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock, metrics)
+    await sched.run_once()
+    await sched.join()
+
+    assert chain.settled == [] and chain.failed == [job.job_id]
+    assert metrics.fails == ["settle_http_503"]
+    # Every wait fits inside the window: the daemon tried for the whole SLA.
+    assert 3400 < sum(sched.sleeps) < 3600
+
+
 # --- confidential boot: ephemeral key publication + provisioning wait ---------
 
 

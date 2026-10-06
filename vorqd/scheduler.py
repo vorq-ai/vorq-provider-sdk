@@ -192,6 +192,14 @@ class NullMetrics:
     def set_capacity_granted(self, n): ...
 
 
+def _error_code(resp: httpx.Response) -> str | None:
+    """The node's ``error.code`` on a refusal, or ``None`` when the body carries none."""
+    try:
+        return resp.json()["error"]["code"]
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def sla_seconds(window: str) -> int:
     unit = window[-1:]
     try:
@@ -213,6 +221,11 @@ def sla_seconds(window: str) -> int:
 #: holds no RPC and the provider record does not carry them), so the chain's own
 #: refusal is the signal: bump, re-sign, push again.
 MAX_MONOTONIC_BUMPS = 3
+
+#: The wait before a settle the node could not relay is sent again: doubling
+#: from the first value up to the second, until the job's SLA closes.
+SETTLE_RETRY_S = 5.0
+SETTLE_RETRY_MAX_S = 60.0
 
 #: ``AskRegistry.MAX_QUOTES``. The contract **skips** a snapshot carrying more,
 #: silently, so a provider that priced more slots than this would publish nothing
@@ -1566,100 +1579,11 @@ class Scheduler:
                 # from the backend's own counter, media from the frames it sealed — so
                 # this only ever clamps a too-large one.
                 completion_tokens = min(completion_tokens, job.units_out)
-            # A result at or under INLINE_MAX_BYTES rides with the settle op as
-            # base64; a bigger one is uploaded first and referenced by its cid.
-            # Either way the node pins the bytes, mints their name and puts it
-            # in `submitAndSettle`. The daemon never learns a CID before the
-            # node answers and never signs one — `sign_settle` has no result
-            # field at all — so it cannot assert a locator it could have forged,
-            # and it holds no pinning credential with which to have pinned
-            # anything. No daemon-side size bound either way: a 413 from the
-            # upload or from the op door is reported below.
             completion_tok = int(completion_tokens or 0)
-            try:
-                ctx = await self._node.chain_context()
-                if len(result_bytes) <= INLINE_MAX_BYTES:
-                    result_field = {"result": base64.b64encode(result_bytes).decode()}
-                else:
-                    result_field = {"result_cid": await self._node.upload_file("result", result_bytes)}
-                # **Stamped after the upload, not before it.** `issued_at` is the
-                # op's freshness and the node refuses one outside ±600 s. Taken
-                # ahead of the upload, the entire window is spent on an operation
-                # the daemon performs before the clock starts: a large result on
-                # a slow uplink arrives already stale, and that 409 lands in the
-                # `OpRefused` branch below, which does not hand the job back — so
-                # the client's escrow idles to SLA expiry and this provider takes
-                # a missed-SLA hit for work it finished and delivered.
-                issued_at = int(self._clock())
-                answer = await self._push(
-                    "settle",
-                    {"job_id": job.job_id, "completion_tok": completion_tok,
-                     "issued_at": issued_at, **result_field},
-                    self.ops.sign_settle(job.job_id, completion_tok, issued_at, ctx),
-                )
-                result_cid = answer.result_cid
-            except OpRefused as exc:
-                # The chain refused the op, and it is not reported.
-                #
-                # Either this daemon no longer holds the job — it settled
-                # elsewhere, or the claim was reclaimed — so the escrow is
-                # already resolved and a fail would be refused in turn; or the
-                # deadline passed between the SLA guard's check and the chain's
-                # clock, a window that spans building the result (for media, one
-                # network fetch per frame) and the settle call itself, all of it
-                # meant to fit inside safety_margin_s. Accepting the reclaim on
-                # that margin is the trade; a daemon that loses this race
-                # routinely has its margin set too low for the outputs it serves.
-                log.warning("settle refused (%s)", exc.reason, extra={"job_id": job.job_id})
-                self._failed(job, f"settle_{exc.reason}")
+            answer = await self._settle(job, result_bytes, completion_tok)
+            if answer is None:
                 return
-            except OpRejected as exc:
-                # The registries did not recognise the signer. The work is done
-                # and cannot be delivered, so hand the job back for a refund.
-                log.warning("settle rejected: %s", exc, extra={"job_id": job.job_id})
-                self._failed(job, "settle_rejected")
-                await self._report_fail(job, "settle_rejected")
-                return
-            except UploadInvalid as exc:
-                # The upload answered 2xx with no name in it, so there is nothing
-                # to reference the result by and no re-post can put it right.
-                # Same standing as a settle HTTP failure: the work is done and
-                # cannot be delivered, so hand the job back rather than leave it
-                # claimed until the reclaim.
-                log.warning("job not settled: %s", exc, extra={"job_id": job.job_id})
-                self._failed(job, "settle_upload_invalid")
-                await self._report_fail(job, "settle_upload_invalid")
-                return
-            except httpx.HTTPError as exc:
-                # Anything short of a settled job that is not a chain refusal —
-                # refused with a status, or never answered at all — leaves a claimed
-                # job with no path to settlement: the work is done, the window is
-                # spent, and nothing in this loop will touch it again. Report it so
-                # the client's escrow refunds now instead of idling to SLA expiry.
-                # The report is best-effort and may need the same surface that just
-                # failed; if the failure was momentary it lands and the client is
-                # refunded, and if it was not, the reclaim is the fallback either way.
-                reason, detail = self._settle_failure(exc, len(result_bytes))
-                log.warning("job not settled: %s", detail, extra={"job_id": job.job_id})
-                self._failed(job, reason, detail)
-                await self._report_fail(job, reason)
-                return
-            if not self._landed(answer, "settle", job.job_id):
-                # A settle that mined reverted leaves the job Claimed, the escrow
-                # still held and this daemon still holding a capacity slot on
-                # chain — `activeJobs` was never decremented, so a run of these
-                # silently eats the concurrency the registry believes is in use.
-                #
-                # Same standing as the transport failure above: the work is done,
-                # the window is spent, and nothing in this loop will touch the job
-                # again. So it is handed back rather than left to idle, which
-                # refunds the client now instead of at SLA expiry and frees the
-                # slot. `_report_fail` is best-effort — if the job was reclaimed
-                # under us the fail is refused in turn and swallowed there, and
-                # the reclaim has already done the same job.
-                self._failed(job, "settle_reverted")
-                await self._report_fail(job, "settle_reverted")
-                return
+            result_cid = answer.result_cid
             self._metrics.on_settle(self._clock() - started)
             if not result_cid:
                 # Not fatal — the job settled — but the answer is meant to name
@@ -1708,6 +1632,93 @@ class Scheduler:
             self._inflight -= 1
             self._throttles[model.model].drop()
             self._metrics.set_capacity_free(max(0, self._slots() - self._inflight))
+
+    async def _settle(self, job, result_bytes: bytes, completion_tok: int):
+        """Deliver a finished job, retrying until the SLA closes.
+
+        The work is done and paid for at the backend, and the node is the only
+        route to the chain, so a failure of the node to relay is waited out, not
+        answered by giving the job back: a ``429``, a ``5xx``, a transport fault,
+        a settle that mined reverted and a ``StaleOp`` are each retried under a
+        fresh ``issued_at`` — the time is inside the signature, so every attempt
+        is signed again. An upload the node no longer holds is uploaded again.
+
+        Returns the node's answer once a settle lands, and ``None`` when it
+        cannot: the chain's verdict that the job is no longer this provider's
+        (nothing is reported — the escrow is already resolved), a refusal no
+        retry can change, or the deadline, after which the job is handed back so
+        the client is refunded without waiting for a reclaim.
+
+        A result at or under INLINE_MAX_BYTES rides with the op as base64; a
+        bigger one is uploaded first and referenced by its cid. Either way the
+        node pins the bytes, mints their name and puts it in `submitAndSettle`:
+        the daemon never learns a CID before the node answers and never signs
+        one.
+        """
+        deadline = job.claimed_at + sla_seconds(job.sla) if job.claimed_at is not None else None
+        result_field: dict | None = None
+        attempt = 0
+        while True:
+            try:
+                ctx = await self._node.chain_context()
+                if result_field is None:
+                    if len(result_bytes) <= INLINE_MAX_BYTES:
+                        result_field = {"result": base64.b64encode(result_bytes).decode()}
+                    else:
+                        result_field = {"result_cid": await self._node.upload_file("result", result_bytes)}
+                # Stamped after the upload, not before it: `issued_at` is the op's
+                # freshness, and a large result on a slow uplink would otherwise
+                # arrive already stale.
+                issued_at = int(self._clock())
+                answer = await self._push(
+                    "settle",
+                    {"job_id": job.job_id, "completion_tok": completion_tok,
+                     "issued_at": issued_at, **result_field},
+                    self.ops.sign_settle(job.job_id, completion_tok, issued_at, ctx),
+                )
+                if self._landed(answer, "settle", job.job_id):
+                    return answer
+                # Mined and reverted: the job is still Claimed. The next attempt's
+                # pre-relay simulate says why, as a refusal.
+                reason, detail, final = "settle_reverted", "the settle mined reverted", False
+            except OpRefused as exc:
+                if exc.reason != "StaleOp":
+                    # The chain's verdict, and it is not reported: this daemon no
+                    # longer holds the job — it settled already, or the deadline
+                    # passed and it was reclaimed — so the escrow is resolved and
+                    # a fail would be refused in turn.
+                    log.warning("settle refused (%s)", exc.reason, extra={"job_id": job.job_id})
+                    self._failed(job, f"settle_{exc.reason}")
+                    return None
+                reason, detail, final = "settle_StaleOp", "the settle was refused as stale", False
+            except OpRejected as exc:
+                # The registries did not recognise the signer.
+                reason, detail, final = "settle_rejected", str(exc), True
+            except UploadInvalid as exc:
+                # The upload answered 2xx with no name in it.
+                reason, detail, final = "settle_upload_invalid", str(exc), True
+            except httpx.HTTPError as exc:
+                reason, detail = self._settle_failure(exc, len(result_bytes))
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                if status == 400 and _error_code(exc.response) == "unknown_result":
+                    # The upload outlived its window before the settle named it.
+                    result_field, final = None, False
+                else:
+                    final = status is not None and status != 429 and status < 500
+
+            delay = min(SETTLE_RETRY_S * 2 ** attempt, SETTLE_RETRY_MAX_S)
+            if final or deadline is None or self._clock() + delay >= deadline:
+                # The work is done and cannot be delivered. Handed back so the
+                # client's escrow refunds now instead of idling to a reclaim; the
+                # report is best-effort and may need the surface that just failed.
+                log.warning("job not settled: %s", detail, extra={"job_id": job.job_id})
+                self._failed(job, reason, detail)
+                await self._report_fail(job, reason)
+                return None
+            log.warning("settle not delivered (%s); retrying in %.0fs", detail, delay,
+                        extra={"job_id": job.job_id})
+            attempt += 1
+            await self._sleep(delay)
 
     async def _withdraw_tripped(self, name: str) -> None:
         """Take a tripped model off the book now, from the job that tripped it.

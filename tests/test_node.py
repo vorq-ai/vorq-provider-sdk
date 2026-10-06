@@ -545,6 +545,17 @@ async def test_list_open_jobs_filters_by_model_id() -> None:
     assert len(jobs) == 1
 
 
+async def test_a_job_at_a_window_this_model_does_not_quote_is_skipped() -> None:
+    # The node leases by model and price, not by window: a 24 h order on a model
+    # this daemon quotes at 1 h only still arrives. It is not this daemon's to
+    # price, and it must not cost the rows around it — or the process.
+    other_window = {**OPEN_ROW, "job_id": "0x" + "ab" * 32, "sla_secs": 86_400}
+    n = node(**{"GET /evm/jobs": json_response(200, {"jobs": [other_window, OPEN_ROW], "as_of_block": 1})})
+    jobs = await n.client(models=resolver({"org/e2ee-model:fp8": {"1h": "0.6"}})).list_open_jobs(7)
+
+    assert [job.job_id for job in jobs] == [OPEN_ROW["job_id"]]
+
+
 async def test_list_open_jobs_narrows_the_book_to_what_this_daemon_can_act_on() -> None:
     """The filters go on the wire, or the narrowing did not happen at all."""
     n = node(**{"GET /evm/jobs": json_response(200, {"jobs": [OPEN_ROW], "as_of_block": 1})})

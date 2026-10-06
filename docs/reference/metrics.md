@@ -63,9 +63,9 @@ sends a signed `fail`, which refunds the client immediately.
 |---|---|
 | `settle_<reason>` | The chain refused the settle, e.g. after the deadline. No `fail` is sent: the job is no longer this provider's. |
 | `settle_rejected` | The registries did not recognise the signer. |
-| `settle_reverted` | The settle was mined but reverted. |
+| `settle_reverted` | The settle was mined but reverted, on every retry until the SLA closed. |
 | `settle_upload_invalid` | The result upload answered without a content id. |
 | `settle_result_too_large` | The result exceeds the coordinator's size limit (`413`). |
-| `settle_http_<status>` | The coordinator refused the settle with that HTTP status. |
+| `settle_http_<status>` | The coordinator refused the settle with that HTTP status. A `429` or `5xx` is retried until the SLA closes. |
 | `session_http_<status>` | Sign-in failed, so the settle was never sent. |
-| `settle_transport_error` | The coordinator did not answer. |
+| `settle_transport_error` | The coordinator did not answer, on every retry until the SLA closed. |

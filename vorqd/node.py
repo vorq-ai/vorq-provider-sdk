@@ -23,6 +23,7 @@ recovers and the contract re-checks; a session never stands in for it.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
@@ -42,6 +43,8 @@ from .errors import (
 from .limits import window_seconds
 from .money import format_usd, parse_usd
 from .types import ChainContext, EvmJob
+
+log = logging.getLogger("vorqd")
 
 #: ``JobState`` from the contracts' ``Types.sol``, in its declared order.
 JOB_STATES = ("Open", "Claimed", "Settled", "Cancelled")
@@ -582,7 +585,16 @@ class NodeClient:
                 "the model catalog has not been resolved, so a job's model_id and sla_secs "
                 "cannot be named; call get_models() and bind_models() at startup"
             )
-        return [job_from_wire(row, resolver, decimals) for row in body.get("jobs", [])]
+        jobs = []
+        for row in body.get("jobs", []):
+            try:
+                jobs.append(job_from_wire(row, resolver, decimals))
+            except UnknownModel as exc:
+                # The node leases by model and price, not by window, so an order
+                # at a deadline this daemon does not quote still arrives. It is
+                # not ours to price; the rows around it are.
+                log.info("skipping job %s: %s", row.get("job_id"), exc)
+        return jobs
 
 
 def job_from_wire(row: dict, resolver: ModelResolver, decimals: int) -> EvmJob:
