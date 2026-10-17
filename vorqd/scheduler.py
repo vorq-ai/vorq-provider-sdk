@@ -1087,6 +1087,19 @@ class Scheduler:
             ]:
                 del self._deferred[stale]
 
+    def _shelve_refused(self, job, reason: str) -> None:
+        """Back off a job whose claim was refused, rather than retrying it every sweep.
+
+        A job another provider won leaves the book by itself; one that stays
+        Open and keeps being refused is refused for something about the job —
+        an owner whose wallet cannot fund the pull, measured 2026-10-17 at one
+        refused claim per job every few seconds for a day, each with a gateway
+        fetch in front of it. ``AtCapacity`` is the exception: it is this
+        daemon's own state, and it clears the moment one of its jobs finishes.
+        """
+        if reason != "AtCapacity":
+            self._defer(job, permanent=False)
+
     async def _claim(self, job) -> bool:
         """Simulate, then push the signed claim. ``False`` means *skip*, never *fail*.
 
@@ -1106,6 +1119,7 @@ class Scheduler:
             return False
         if not sim.ok:
             log.info("claim would not land for %s (%s)", job.job_id, sim.reason)
+            self._shelve_refused(job, sim.reason)
             return False
         issued_at = int(self._clock())
         ctx = await self._node.chain_context()
@@ -1115,6 +1129,7 @@ class Scheduler:
                                       signature)
         except OpRefused as exc:
             log.info("lost race for job %s (%s)", job.job_id, exc.reason)
+            self._shelve_refused(job, exc.reason)
             return False
         except OpRejected as exc:
             # The registries did not recognise the signer: an unregistered
@@ -1772,11 +1787,14 @@ class Scheduler:
                 try:
                     run_kw = ({"resume": resume if attempt == 0 else None, "on_handle": remember}
                               if resumable else {})
-                    return await asyncio.wait_for(
-                        driver.run(job, job_input, timeout_s=timeout_s, **run_kw),
-                        timeout=max(1.0, deadline - self._clock()),
-                    )
-                except asyncio.TimeoutError as exc:
+                    # `asyncio.timeout`, not `wait_for`: on 3.11 `wait_for` runs
+                    # the attempt in a task of its own, and Sentry's asyncio
+                    # integration reports every exception leaving a task — so
+                    # each retried backend error became an event, a cut stream
+                    # the next attempt recovered included.
+                    async with asyncio.timeout(max(1.0, deadline - self._clock())):
+                        return await driver.run(job, job_input, timeout_s=timeout_s, **run_kw)
+                except TimeoutError as exc:
                     # The wall on the attempt as a whole. `timeout_s` is a read
                     # ceiling — one silence — and a streamed answer that keeps
                     # producing has no other end.

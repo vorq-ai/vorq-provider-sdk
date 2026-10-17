@@ -1850,6 +1850,49 @@ async def test_a_refused_claim_is_a_skip_and_never_a_failure():
     assert driver.last_timeout_s is None
 
 
+async def test_a_refused_claim_is_shelved_and_retried_on_the_backoff():
+    """A job that stays Open and keeps being refused is refused for something
+    about the job — measured 2026-10-17, an owner whose wallet could not fund
+    the pull, retried every sweep for a day. It waits out the doubling backoff."""
+    from vorqd.scheduler import UNRESOLVED_RETRY_S
+
+    clock = Clock()
+    job = open_text_job("unfunded")
+    chain = FakeNode([job], clock, refuse_claim="InsufficientFunds")
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
+    await sched.run_once()
+    await sched.run_once()             # same second: shelved, not pushed again
+    await sched.join()
+    assert len(chain.pushed("claim")) == 1
+
+    clock.advance(UNRESOLVED_RETRY_S + 1)
+    await sched.run_once()
+    await sched.join()
+    assert len(chain.pushed("claim")) == 2
+
+
+async def test_a_gate_refusal_is_shelved_too_but_at_capacity_is_not():
+    """The gate's own `no` is backed off for the same reason, except `AtCapacity`:
+    that is this daemon's state and clears when one of its jobs finishes."""
+    clock = Clock()
+    unfunded = open_text_job("gate_unfunded")
+    chain = FakeNode([unfunded], clock,
+                     simulate=ClaimSimulation(ok=False, reason="InsufficientFunds"))
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
+    await sched.run_once()
+    await sched.run_once()
+    await sched.join()
+    assert len(chain.simulations) == 1
+
+    full = open_text_job("gate_full")
+    chain = FakeNode([full], clock, simulate=ClaimSimulation(ok=False, reason="AtCapacity"))
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
+    await sched.run_once()
+    await sched.run_once()
+    await sched.join()
+    assert len(chain.simulations) == 2
+
+
 async def test_a_claim_that_mined_reverted_is_never_run():
     """The pre-relay simulate is authoritative only at the instant it runs.
 
@@ -4136,6 +4179,25 @@ async def test_a_retryable_failure_is_retried_after_the_backoff_and_settles():
     assert metrics.retries == [MODEL]
     assert [s[0] for s in chain.settled] == [job.job_id]
     assert chain.failed == [] and metrics.fails == []
+
+
+async def test_every_attempt_runs_in_the_jobs_own_task():
+    """A retried backend error must not leave a task of its own: Sentry's asyncio
+    integration reports every exception that does, so under `wait_for` a cut
+    stream the next attempt recovered became an event (PROVIDER-TESTNET-4)."""
+    clock = Clock()
+    job = open_text_job()
+    chain = FakeNode([job], clock)
+    tasks = []
+    driver = FlakyDriver([BackendError("the backend failed mid-stream", retryable=True)],
+                         on_run=lambda _job: tasks.append(asyncio.current_task()))
+    sched = make_scheduler(make_config([text_model(retries=2, retry_backoff_s=30)]),
+                           chain, driver, clock)
+    await sched.run_once()
+    await sched.join()
+    assert driver.calls == 2
+    assert tasks[0] is tasks[1]
+    assert [s[0] for s in chain.settled] == [job.job_id]
 
 
 async def test_a_retry_after_longer_than_the_backoff_is_honoured():
