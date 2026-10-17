@@ -1002,6 +1002,10 @@ class Scheduler:
                 continue
             if not await self._claim(job):
                 continue
+            # Cleared on the claim, not on the fetch: the fetch runs ahead of
+            # every claim attempt, so clearing there reset a refused claim's
+            # backoff to its first step on every retry.
+            self._deferred.pop(str(job.job_id), None)
             self._metrics.on_claim()
             log.info("claimed", extra={"job_id": job.job_id, "model": model.model})
             await self._ingest(job, model, container)
@@ -1043,7 +1047,6 @@ class Scheduler:
             log.warning("not claiming %s: unusable job fields for the commitment check (%s)",
                         job.job_id, exc)
             return None
-        self._deferred.pop(str(job.job_id), None)
         return raw
 
     def _is_deferred(self, job) -> bool:

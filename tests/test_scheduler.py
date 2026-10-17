@@ -1870,6 +1870,17 @@ async def test_a_refused_claim_is_shelved_and_retried_on_the_backoff():
     await sched.join()
     assert len(chain.pushed("claim")) == 2
 
+    # The second refusal doubled the wait — the fetch in front of each attempt
+    # must not reset it.
+    clock.advance(UNRESOLVED_RETRY_S + 1)
+    await sched.run_once()
+    await sched.join()
+    assert len(chain.pushed("claim")) == 2
+    clock.advance(UNRESOLVED_RETRY_S)
+    await sched.run_once()
+    await sched.join()
+    assert len(chain.pushed("claim")) == 3
+
 
 async def test_a_gate_refusal_is_shelved_too_but_at_capacity_is_not():
     """The gate's own `no` is backed off for the same reason, except `AtCapacity`:
