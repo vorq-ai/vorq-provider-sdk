@@ -1661,7 +1661,8 @@ class Scheduler:
         fresh ``issued_at`` — the time is inside the signature, so every attempt
         is signed again. An upload the node no longer holds is uploaded again.
 
-        Returns the node's answer once a settle lands, and ``None`` when it
+        Returns the node's answer once a settle lands — or the job row, when a
+        retry finds an earlier attempt already settled it — and ``None`` when it
         cannot: the chain's verdict that the job is no longer this provider's
         (nothing is reported — the escrow is already resolved), a refusal no
         retry can change, or the deadline, after which the job is handed back so
@@ -1701,6 +1702,19 @@ class Scheduler:
                 reason, detail, final = "settle_reverted", "the settle mined reverted", False
             except OpRefused as exc:
                 if exc.reason != "StaleOp":
+                    # A retry refused because an earlier attempt did land: a 504
+                    # or a dropped connection hides a settle that mined, and the
+                    # job is then this provider's Settled row, not a failure.
+                    if attempt > 0 and exc.reason == "NotClaimed":
+                        try:
+                            row = await self._node.get_job(job.job_id)
+                        except httpx.HTTPError as read:
+                            log.warning("could not read the job after a NotClaimed settle: %s", read,
+                                        extra={"job_id": job.job_id})
+                            row = None
+                        if row is not None and row.state == "Settled" and row.provider == self.provider:
+                            log.info("an earlier settle attempt landed", extra={"job_id": job.job_id})
+                            return row
                     # The chain's verdict, and it is not reported: this daemon no
                     # longer holds the job — it settled already, or the deadline
                     # passed and it was reclaimed — so the escrow is resolved and

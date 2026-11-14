@@ -187,6 +187,9 @@ class FakeNode:
         self.claimed_lists = getattr(self, "claimed_lists", 0) + 1
         return [j for j in self._jobs.values() if j.state == "Claimed" and j.provider == provider]
 
+    async def get_job(self, job_id):
+        return self._jobs[job_id]
+
     async def get_models(self):
         return list(self.catalog)
 
@@ -2454,6 +2457,40 @@ async def test_a_settle_the_node_could_not_relay_is_sent_again(first):
     first_try, second_try = chain.pushed("settle")
     assert second_try["issued_at"] > first_try["issued_at"]   # stamped, and so signed, afresh
     assert sched.sleeps == [5.0]
+
+
+@pytest.mark.parametrize("settled_by", [PROVIDER_ID, PROVIDER_ID + 1])
+async def test_a_settle_whose_lost_answer_had_landed_is_not_a_failure(settled_by):
+    # Production, 2026-11-09: the first settle mined but the edge answered 504,
+    # so the retry was refused NotClaimed and a delivered job was reported failed.
+    clock = Clock()
+    job = open_text_job("landed")
+
+    class LostAnswerNode(FakeNode):
+        tries = 0
+
+        async def push_op(self, op, payload, signature):
+            if op == "settle":
+                self.tries += 1
+                if self.tries == 1:
+                    await super().push_op(op, payload, signature)
+                    self._jobs[payload["job_id"]].provider = settled_by
+                    raise _status_error(504)
+                self.ops.append((op, dict(payload), signature))
+                raise OpRefused("NotClaimed")
+            return await super().push_op(op, payload, signature)
+
+    chain = LostAnswerNode([job], clock)
+    metrics = FakeMetrics()
+    sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock, metrics)
+    await sched.run_once()
+    await sched.join()
+
+    if settled_by == PROVIDER_ID:
+        assert metrics.settles == 1 and metrics.fails == []
+    else:
+        assert metrics.settles == 0 and metrics.fails == ["settle_NotClaimed"]
+    assert chain.failed == []
 
 
 async def test_a_settle_naming_an_upload_the_node_dropped_uploads_it_again():

@@ -523,6 +523,14 @@ class NodeClient:
                 return jobs
             offset += len(rows)
 
+    async def get_job(self, job_id: str) -> EvmJob:
+        """``GET /evm/jobs/{id}``: one job row as the node holds it now."""
+        decimals = (await self.chain_context()).decimals
+        if self._models is None:
+            raise CatalogUnresolved("the model catalog has not been resolved; call get_models() "
+                                    "and bind_models() at startup")
+        return job_from_wire(await self._read(f"/evm/jobs/{job_id}"), self._models, decimals)
+
     async def get_provider(self, provider_id: int) -> dict:
         """One provider row: its box key, evidence, listing, capacity and load."""
         return await self._read(f"/evm/providers/{int(provider_id)}")
