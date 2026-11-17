@@ -735,6 +735,11 @@ def _build_limits(d: dict, model: str) -> dict:
             f"{where}: 'retry_statuses' must be a list of 4xx status codes — 429 and every 5xx "
             "are retried already"
         )
+    if 402 in raw_statuses:
+        raise ConfigError(
+            f"{where}: 'retry_statuses' may not list 402 — an account out of funds takes the "
+            "whole daemon off the book, and a retry would only spend the job's budget"
+        )
     backoff = positive_number("retry_backoff_s", 30.0)
     backoff_max = positive_number("retry_backoff_max_s", 900.0)
     if backoff_max < backoff:

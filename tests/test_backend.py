@@ -13,7 +13,7 @@ from vorqd.backend import (BackendDriver, DEFAULT_DIM, ENVELOPE_SLACK_BYTES, Nor
                            responses_to_chat)
 from vorqd.types import EvmJob
 from vorqd.config import BackendConfig
-from vorqd.errors import BackendError, BackendGone
+from vorqd.errors import BackendError, BackendGone, BackendUnfunded
 
 
 def text_job():
@@ -1281,6 +1281,18 @@ async def test_an_endpoint_that_is_not_there_is_gone_not_refused(status):
     with pytest.raises(BackendGone, match=f"HTTP {status}") as info:
         await _stream_driver(gone).run(text_job(), {"messages": []})
     assert not info.value.retryable
+
+
+async def test_an_account_out_of_funds_is_unfunded_not_refused():
+    """A 402 is its own kind: never retried, and the scheduler takes the whole
+    daemon off the book for it rather than blaming the one job."""
+    def broke(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, content=b'{"error":{"message":"Insufficient credits"}}')
+
+    for driver in (_stream_driver(broke), _chat_driver(broke)):
+        with pytest.raises(BackendUnfunded, match="HTTP 402") as info:
+            await driver.run(text_job(), {"messages": []})
+        assert not info.value.retryable
 
 
 async def test_stream_is_the_operators_switch_not_the_clients():
@@ -2568,3 +2580,22 @@ async def test_preset_headers_render_job_fields_over_the_presets_own():
     assert captured["headers"]["x-request-id"] == "job_1"
     assert captured["headers"]["x-request-client"] == job.owner
     assert captured["headers"]["authorization"] == "Bearer sk-x"
+
+
+async def test_openai_batch_a_refused_create_deletes_the_uploaded_input():
+    """No batch holds the file once the create is refused, so nothing else would
+    ever delete it — a 402 there leaves no file behind."""
+    log = []
+
+    def handler(req):
+        log.append((req.method, req.url.path))
+        if req.url.path == "/v1/files" and req.method == "POST":
+            return httpx.Response(201, json={"id": "file_in", "object": "file"})
+        if req.url.path == "/v1/batches":
+            return httpx.Response(402, json={"error": {"message": "Insufficient credits"}})
+        if req.method == "DELETE" and req.url.path == "/v1/files/file_in":
+            return httpx.Response(200, json={"id": "file_in", "deleted": True})
+        return httpx.Response(404, json={})
+    with pytest.raises(BackendUnfunded):
+        await _batch_driver(handler).run(batch_job(), {"input": "hi"})
+    assert log == [("POST", "/v1/files"), ("POST", "/v1/batches"), ("DELETE", "/v1/files/file_in")]

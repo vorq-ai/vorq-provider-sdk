@@ -951,6 +951,7 @@ def test_backend_limits_load_on_a_confidential_entry(tmp_path):
     ("      retries: two\n", "retries"),
     ("      retry_statuses: [503]\n", "retry_statuses"),
     ("      retry_statuses: 404\n", "retry_statuses"),
+    ("      retry_statuses: [402]\n", "402"),
     ("      concurrency: 0\n", "concurrency"),
     ("      concurrency: 2\n      queue: 3\n", "queue"),   # gone: the SLA window holds
     ("      timeout_s: 0\n", "timeout_s"),

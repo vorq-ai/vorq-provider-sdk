@@ -137,6 +137,20 @@ class BackendGone(BackendError):
         super().__init__(message, retryable=False)
 
 
+class BackendUnfunded(BackendError):
+    """The backend answered 402: the operator's account there is out of funds.
+
+    Never retryable, and never one model's fault: the balance belongs to the
+    account, so every model this daemon serves is equally unable to run. The
+    scheduler trips every breaker at once, withdraws every ask, and gives back
+    each held job not yet accepted upstream — inside the fail grace, where a
+    fail costs the provider no reputation. The breaker cooldown re-lists.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, retryable=False)
+
+
 class DeadlineExceeded(BackendError):
     """The next wait or attempt would end past the job's SLA deadline."""
 

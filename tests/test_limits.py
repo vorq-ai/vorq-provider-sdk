@@ -280,3 +280,13 @@ def test_the_breaker_comes_from_the_backend_limits():
     breaker.record_failure()
     assert breaker.record_failure() is True
     assert breaker.open_until == 1010.0
+
+
+def test_trip_opens_at_once_and_does_not_extend_an_open_cooldown():
+    clock = Clock()
+    breaker = Breaker(trip_after=3, cooldown_s=60, clock=clock)
+    assert breaker.trip() and breaker.open_until == clock() + 60
+    clock.advance(30)
+    assert not breaker.trip() and breaker.open_until == clock() + 30
+    clock.advance(31)
+    assert not breaker.tripped() and breaker.trip()

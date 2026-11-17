@@ -6,6 +6,15 @@ All notable changes to `vorqd` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A backend answering `402` (account out of funds) takes every model off the
+  book at once, under the new reason `backend_unfunded`. Held jobs the backend
+  has not accepted are failed inside the fail grace, jobs it already accepted
+  keep running, and the breaker cooldown lists the models again. `402` may not
+  appear in `retry_statuses`. A refused batch create now deletes the input file
+  it uploaded.
+
 ### Changed
 
 - A backend answering `404` or `410` now counts toward the circuit breaker. The

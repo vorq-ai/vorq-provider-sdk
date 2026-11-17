@@ -69,6 +69,17 @@ job the backend completes resets the count. A `404` or `410` counts, because the
 not there whatever the job asked; any other `4xx` refusal does not.
 `trip_after: 0` disables this.
 
+## Stop when the backend account is out of funds
+
+A `402` means the account behind the backend has run out of funds, which no model can work
+around. The first `402` withdraws the asks of **every** model the daemon serves, whatever
+`trip_after` says. Jobs it holds that the backend has not yet accepted are failed right away,
+inside the fail grace, so the provider's reputation is not affected. Jobs the backend already
+accepted keep running and settle. After `trip_cooldown_s` the models are listed again. If the
+account is still out of funds, the next `402` withdraws them all again; once a job succeeds, the
+daemon is back to normal. Set `trip_cooldown_s` to how often the daemon should check after a top-up.
+`402` cannot be listed in `retry_statuses`.
+
 ## Let capacity follow the limits
 
 Leave `provider.capacity` unset and it is the sum of what each entry may hold: its `rate_limit`

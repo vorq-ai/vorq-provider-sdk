@@ -14,8 +14,9 @@ execute, normalize, seal the result back to the envelope's key, and push a signe
 CID it then names on chain. A job that overruns its SLA (minus the safety margin)
 is abandoned, not settled. An unhealthy backend withdraws its asks and
 republishes on recovery; a backend that fails ``trip_after`` jobs in a row is
-withdrawn from the job that tripped it and re-listed after a cooldown. Every
-failure path frees its slot.
+withdrawn from the job that tripped it and re-listed after a cooldown. A
+``402`` — the backend account out of funds — trips every model at once and gives
+back each held job not yet accepted upstream. Every failure path frees its slot.
 
 **The daemon speaks to a coordinator node and to nothing else.** Startup is a
 session handshake, the catalog (which binds every configured model name to the
@@ -58,6 +59,7 @@ from .errors import (
     BackendError,
     BackendExhausted,
     BackendGone,
+    BackendUnfunded,
     ChainConflict,
     ConfigError,
     DeadlineExceeded,
@@ -116,7 +118,7 @@ def _backend_at_fault(exc: BackendError) -> bool:
     404 or 410 is an endpoint that is not there, whatever the job asked. Any
     other non-retryable refusal is the job's input, not the backend.
     """
-    if isinstance(exc, (BackendExhausted, BackendGone)):
+    if isinstance(exc, (BackendExhausted, BackendGone, BackendUnfunded)):
         return True
     if isinstance(exc, DeadlineExceeded):
         return isinstance(exc.__cause__, BackendError)
@@ -338,6 +340,9 @@ class Scheduler:
         # A backend that fails job after job is withdrawn from the book, from
         # the job that tripped it, and re-listed after a cooldown.
         self._breakers = {m.model: Breaker.from_backend(m.backend, clock) for m in config.models}
+        # Set by a 402, cleared by the next success: while it is set, a tripped
+        # model's held jobs are given back before they are ever submitted.
+        self._unfunded = False
         # One snapshot on the wire at a time: the sweep and a tripped job's own
         # push would otherwise diff the same book and both pay to withdraw it.
         self._asks_lock = asyncio.Lock()
@@ -1580,7 +1585,13 @@ class Scheduler:
             # suspends. The row stays, so a crash during the settle re-polls the
             # finished response at the next boot instead of submitting again.
             self._in_backend.discard(job.job_id)
-            self._breakers[model.model].record_success()
+            breaker = self._breakers[model.model]
+            if not (self._unfunded and breaker.tripped()):
+                # While the account is out of funds and the breaker is open,
+                # only work accepted before the 402 can finish — fresh submits
+                # are refused — so its success says nothing about the balance.
+                breaker.record_success()
+                self._unfunded = False
             self._metrics.on_backend_latency(model.model, self._clock() - started)
 
             if not self._within_sla(job):
@@ -1621,6 +1632,8 @@ class Scheduler:
                 reason = "backend_exhausted"
             elif isinstance(exc, BackendGone):
                 reason = "backend_gone"
+            elif isinstance(exc, BackendUnfunded):
+                reason = "backend_unfunded"
             elif isinstance(exc, MediaInputRefused):
                 # Its own label because it is its own thing: not a backend that
                 # misbehaved but a reference the client declared smaller than it
@@ -1632,7 +1645,9 @@ class Scheduler:
             else:
                 reason = "backend_error"
             self._failed(job, reason, str(exc))
-            if _backend_at_fault(exc) and self._breakers[model.model].record_failure():
+            if isinstance(exc, BackendUnfunded):
+                await self._trip_unfunded()
+            elif _backend_at_fault(exc) and self._breakers[model.model].record_failure():
                 await self._withdraw_tripped(model.model)
             await self._report_fail(job, str(exc))
         except asyncio.CancelledError:
@@ -1768,6 +1783,28 @@ class Scheduler:
         except Exception:
             log.exception("could not withdraw the tripped model's asks now; the next sweep retries")
 
+    async def _trip_unfunded(self) -> None:
+        """The backend account is out of funds: take every model off the book now.
+
+        Funds belong to the account, not to the model whose job met the 402, so
+        every breaker opens together and one snapshot withdraws every ask. Held
+        jobs not yet accepted upstream are refused at their next admission
+        (`_admit`); jobs already accepted keep polling, since the work is paid
+        for there and can still settle. The cooldown re-lists everything, and
+        the first job to meet a 402 again trips it all once more.
+        """
+        self._unfunded = True
+        opened = [name for name, breaker in self._breakers.items() if breaker.trip()]
+        if not opened:
+            return
+        cooldown = max(b.open_until for b in self._breakers.values()) - self._clock()
+        log.error("backend account out of funds (HTTP 402); every ask withdrawn for %.0fs",
+                  cooldown, extra={"models": opened})
+        try:
+            await self.sync_asks()
+        except Exception:
+            log.exception("could not withdraw the asks now; the next sweep retries")
+
     async def _run_attempts(self, job, model, driver, job_input, *,
                             resume: str | None = None) -> Normalized:
         """Run the backend for one job, retrying inside the SLA budget.
@@ -1797,7 +1834,10 @@ class Scheduler:
 
         resumable = bool(getattr(driver, "resumable", False))
         for attempt in range(policy.attempts):
-            await self._admit(job, model.model, throttle, deadline, attempt)
+            # A resumed first attempt polls work already accepted upstream: it
+            # is never refused for funds, only a fresh submit is.
+            await self._admit(job, model.model, throttle, deadline, attempt,
+                              fresh=not (attempt == 0 and resume))
             throttle.acquire()
             try:
                 timeout_s = self._attempt_timeout(policy, deadline)
@@ -1841,15 +1881,21 @@ class Scheduler:
                 self._wake(model.model)
         raise BackendExhausted("no attempt was made")  # pragma: no cover — attempts >= 1
 
-    async def _admit(self, job, name: str, throttle, deadline: float, attempt: int) -> None:
+    async def _admit(self, job, name: str, throttle, deadline: float, attempt: int, *,
+                     fresh: bool = True) -> None:
         """Wait until the model's throttle admits one more attempt, or raise.
 
         Two things can hold an attempt: a spent `rate_limit` window, which clears
         on the clock, and every in-flight slot taken by a sibling job, which
         clears when one of them returns. The first is slept through, the second
-        waited on (`_wake`), and neither past the deadline.
+        waited on (`_wake`), and neither past the deadline. A fresh submit is
+        refused while the account is out of funds and the model is still off
+        the book: it fails now, inside the grace, instead of meeting the 402.
         """
         while True:
+            if fresh and self._unfunded and self._breakers[name].tripped():
+                raise BackendUnfunded("held while the backend account is out of funds; "
+                                      "never submitted")
             wait = throttle.wait_s()
             if wait <= 0 and throttle.startable() > 0:
                 return

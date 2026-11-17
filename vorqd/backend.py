@@ -23,7 +23,7 @@ import httpx
 from . import media, media_units
 from ._templates import extract, parse_path, render, resolves
 from .config import BackendConfig
-from .errors import BackendError, BackendGone, MediaInputRefused
+from .errors import BackendError, BackendGone, BackendUnfunded, MediaInputRefused
 from .limits import parse_retry_after, window_seconds
 from .reasoning import budget_for_effort
 
@@ -1286,11 +1286,17 @@ class BackendDriver:
         file_id = upload.get("id") if isinstance(upload, dict) else None
         if not isinstance(file_id, str) or not file_id:
             raise BackendError("the batch upload answered with no file id")
-        return await self._request_json(
-            "POST", m.request["url"], m.request["headers"],
-            {"input_file_id": file_id, "endpoint": endpoint,
-             "completion_window": p.get("completion_window", "24h")},
-            timeout=timeout)
+        try:
+            return await self._request_json(
+                "POST", m.request["url"], m.request["headers"],
+                {"input_file_id": file_id, "endpoint": endpoint,
+                 "completion_window": p.get("completion_window", "24h")},
+                timeout=timeout)
+        except BackendError:
+            # No batch holds the file, so nothing else will ever delete it; a
+            # retried create uploads a fresh one.
+            await self._batch_discard_input(m, {"input_file_id": file_id})
+            raise
 
     async def _batch_collect(self, m: Mapping, job, batch: dict, timeout) -> dict:
         """The job's own line out of the finished batch: its chat completion, or why not.
@@ -1484,6 +1490,9 @@ class BackendDriver:
                         retry_after_s, url, text)
             raise BackendError("the backend throttled the request with HTTP 429",
                                retryable=True, retry_after_s=retry_after_s)
+        if status == 402:
+            log.warning("backend account out of funds (HTTP 402): %s — %s", url, text)
+            raise BackendUnfunded("the backend answered HTTP 402: the account is out of funds")
         if status in (404, 410):
             log.warning("backend gone (HTTP %s): %s — %s", status, url, text)
             raise BackendGone(f"the backend answered HTTP {status}: the endpoint is not there")

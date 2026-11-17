@@ -31,6 +31,7 @@ from vorqd.container import MIN_CONTAINER_BYTES, derive_dek, sealed_plaintext_by
 from vorqd.errors import (
     BackendError,
     BackendGone,
+    BackendUnfunded,
     ChainConflict,
     ConfigError,
     OpRefused,
@@ -1266,6 +1267,111 @@ async def test_an_endpoint_that_is_gone_trips_the_breaker():
     assert metrics.fails == ["backend_gone"] * 3
     assert chain.published == []
     assert sched._breakers[MODEL].tripped()
+
+
+# --- 402: the backend account is out of funds ----------------------------------
+
+
+class UnfundedDriver(FailingDriver):
+    """A backend whose account is out of funds: every submit answers 402 until
+    ``fail`` is cleared."""
+
+    async def run(self, job, input, *, timeout_s=None):
+        self.calls += 1
+        if self.fail:
+            raise BackendUnfunded("the backend answered HTTP 402: the account is out of funds")
+        return Normalized(kind="text", text="answer", completion_tokens=42, raw={"choices": []})
+
+
+def _unfunded(jobs, models, *, driver=None, cooldown=1800, **limits):
+    clock = Clock()
+    chain = FakeNode(jobs, clock)
+    metrics = FakeMetrics()
+    driver = driver or UnfundedDriver()
+    config = make_config([text_model(m, trip_cooldown_s=cooldown, **limits) for m in models])
+    return clock, chain, metrics, driver, make_scheduler(config, chain, driver, clock, metrics)
+
+
+async def test_one_402_takes_every_model_off_the_book_at_once():
+    """Funds are the account's, not the model's: the first 402 withdraws every
+    ask in one snapshot, and nothing is retried against an empty balance."""
+    clock, chain, metrics, driver, sched = _unfunded(
+        [open_text_job("broke")], [MODEL, "model-a:fp8"], retries=4)
+    await sched.run_once()
+    assert chain.published == sorted([MODEL, "model-a:fp8"])
+    await sched.join()
+    assert driver.calls == 1
+    assert metrics.fails == ["backend_unfunded"]
+    assert chain.published == []
+    assert len(chain.snapshots) == 2               # the book, then one withdrawal
+    assert all(b.tripped() for b in sched._breakers.values())
+
+
+async def test_held_jobs_are_given_back_without_ever_being_submitted():
+    """Jobs queued behind the one that met the 402 fail at once, inside the
+    grace, instead of each paying a submit to learn the same thing."""
+    jobs = [open_text_job(f"held_{i}") for i in range(3)]
+    clock, chain, metrics, driver, sched = _unfunded(jobs, [MODEL], concurrency=1,
+                                                     rate_limit={"1h": 10})
+    await sched.run_once()
+    await sched.join()
+    assert driver.calls == 1
+    assert metrics.fails == ["backend_unfunded"] * 3
+    assert sorted(chain.failed) == sorted(j.job_id for j in jobs)
+
+
+async def test_work_accepted_before_the_402_still_settles_and_keeps_the_book_closed():
+    """A job already running upstream is paid for there: it finishes and settles.
+    Its success proves nothing about the balance, so the asks stay withdrawn."""
+    accepted, broke = open_text_job("accepted"), open_text_job("broke")
+    release = asyncio.Event()
+
+    class Mixed(UnfundedDriver):
+        async def run(self, job, input, *, timeout_s=None):
+            self.calls += 1
+            if job.job_id == accepted.job_id:
+                await release.wait()
+                return Normalized(kind="text", text="answer", completion_tokens=42,
+                                  raw={"choices": []})
+            release.set()
+            raise BackendUnfunded("the backend answered HTTP 402: the account is out of funds")
+
+    clock, chain, metrics, driver, sched = _unfunded([accepted, broke], [MODEL], driver=Mixed())
+    await sched.run_once()
+    await sched.join()
+    assert accepted.state == "Settled"
+    assert metrics.fails == ["backend_unfunded"]
+    assert sched._breakers[MODEL].tripped()
+    await sched.sync_asks()
+    assert chain.published == []
+
+
+async def test_the_cooldown_relists_and_the_next_402_trips_everything_again():
+    clock, chain, metrics, driver, sched = _unfunded(
+        [open_text_job("broke")], [MODEL, "model-a:fp8"], cooldown=60)
+    await sched.run_once()
+    await sched.join()
+    assert chain.published == []
+
+    clock.advance(61)
+    await sched.sync_asks()
+    assert chain.published == sorted([MODEL, "model-a:fp8"])   # re-listed on trust
+
+    again = open_text_job("again")
+    chain._jobs[again.job_id] = again
+    await sched.run_once()
+    await sched.join()
+    assert chain.published == []                               # still broke: off again
+
+    clock.advance(61)
+    driver.fail = False                                        # topped up
+    ok = open_text_job("ok")
+    chain._jobs[ok.job_id] = ok
+    await sched.run_once()
+    await sched.join()
+    assert ok.state == "Settled"
+    assert not sched._unfunded
+    assert chain.published == sorted([MODEL, "model-a:fp8"])
 
 
 async def test_every_failed_job_is_reported_under_its_model(monkeypatch):

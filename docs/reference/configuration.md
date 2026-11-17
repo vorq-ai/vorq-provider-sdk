@@ -122,7 +122,7 @@ These keys are valid on every `backend` block, preset or raw.
 | Key | Default | Meaning |
 |---|---|---|
 | `retries` | `0` | Attempts after the first. A `429`, any `5xx`, a transport error or timeout, and statuses in `retry_statuses` are retried; any other `4xx` fails the job. Non-negative integer. |
-| `retry_statuses` | none | Extra `4xx` codes to retry. |
+| `retry_statuses` | none | Extra `4xx` codes to retry. `402` is refused: it means the account is out of funds, and it withdraws every model. |
 | `retry_backoff_s` | `30` | First retry delay, doubling after each retry. A `429`'s `Retry-After` (in seconds) wins when longer. Positive number. |
 | `retry_backoff_max_s` | `900` | Ceiling on one delay. Must be at least `retry_backoff_s`. |
 | `timeout_s` | remaining SLA budget | Read timeout of one attempt, never beyond `deadline − safety_margin_s`. With `stream: true`, the longest silence between chunks. |

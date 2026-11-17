@@ -300,6 +300,16 @@ class Breaker:
         self.open_until = self._clock() + self._cooldown_s
         return True
 
+    def trip(self) -> bool:
+        """Open now, whatever the streak: a fault that is the account's, not
+        this model's. ``True`` exactly when this opened it; an open breaker
+        keeps its cooldown, so a second such fault does not extend it.
+        """
+        if self.tripped():
+            return False
+        self.open_until = self._clock() + self._cooldown_s
+        return True
+
     def record_success(self) -> None:
         self.streak = 0
         self.open_until = None

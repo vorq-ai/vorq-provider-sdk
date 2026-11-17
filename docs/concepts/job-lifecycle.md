@@ -75,6 +75,7 @@ provider reputation.
 | Backend health check fails | Withdraws the model's asks; jobs already claimed keep running. Republishes when the check passes. |
 | Backend error during a job | Retries a `429`, `5xx` or timeout within the SLA budget. Otherwise, or once retries run out, sends `fail` so the client is refunded now. |
 | Backend fails `trip_after` jobs in a row | Withdraws the model's asks immediately and lists it again after `trip_cooldown_s`. |
+| Backend answers `402` (account out of funds) | Withdraws every model's asks immediately, fails held jobs not yet accepted by the backend, and lists them again after `trip_cooldown_s`. |
 | Payload or envelope invalid, payload key unavailable | Sends `fail` immediately. |
 | Settle refused by the chain (`409`) | Logs it and drops the job: it is no longer this provider's to settle. |
 | Settle not delivered (HTTP error, upload failure, reverted) | Sends `fail` so the client is refunded now. |
