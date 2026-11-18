@@ -22,6 +22,9 @@ All notable changes to `vorqd` are documented here. The format follows
 ### Added
 
 - Per-window `rate_in_cached` (USD string, at most `rate_in`; default: no discount).
+- Each pushed ask quote carries `rate_in_cached`, unsigned beside the signed
+  rates: the configured cached rate capped at the quote's `rate_in`, or `rate_in`
+  when none is configured. The coordinator lists it with the ask.
 
 ### Removed
 

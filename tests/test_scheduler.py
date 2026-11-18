@@ -1200,7 +1200,8 @@ async def test_consecutive_backend_faults_withdraw_the_model_at_once():
     assert metrics.fails == ["backend_exhausted"] * 3
     assert chain.published == []
     assert len(chain.snapshots) == 2
-    assert _quotes(chain) == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0"}]
+    assert _quotes(chain) == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0",
+                               "rate_in_cached": "0"}]
     assert sched._breakers[MODEL].tripped()
 
 
@@ -1508,12 +1509,37 @@ async def test_the_snapshot_is_the_whole_book_in_ids_and_seconds():
     # publishing prices under somebody else's id.
     assert snapshot["provider_id"] == PROVIDER_ID
     assert snapshot["quotes"] == [
-        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6"},
+        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6", "rate_in_cached": "0.2"},
         # A side the model does not meter is quoted at zero, not omitted.
-        {"model_id": 7, "sla": 86400, "rate_in": "0", "rate_out": "0.09"},
+        {"model_id": 7, "sla": 86400, "rate_in": "0", "rate_out": "0.09", "rate_in_cached": "0"},
     ]
     assert isinstance(snapshot["signed_at"], int)
     assert all(isinstance(q[k], int) for q in snapshot["quotes"] for k in ("model_id", "sla"))
+
+
+async def test_each_quote_lists_its_cached_rate_unsigned_and_never_above_rate_in():
+    """``rate_in_cached`` is the rate settle would sign against a job at this
+    ask: the configured one, held to ``rate_in``. It rides outside the signature,
+    so adding it changes no signed byte."""
+    from vorqd import opsig
+
+    clock = Clock()
+    chain = FakeNode([], clock)
+    model = ModelConfig(
+        model=MODEL,
+        slas={"1h": SlaRate(rate_in="0.2", rate_out="0.6", rate_in_cached="0.05"),
+              "24h": SlaRate(rate_in="0.1", rate_out="0.3", rate_in_cached="0.1")},
+        backend=BackendConfig(preset="openai-chat", params={"base_url": "http://r/v1", "model": "rt"}),
+    )
+    sched = make_scheduler(make_config([model]), chain, FakeDriver(), clock)
+    await sched.sync_asks()
+
+    snapshot, _ = chain.snapshots[-1]
+    assert [q["rate_in_cached"] for q in snapshot["quotes"]] == ["0.05", "0.1"]
+    bare = {**snapshot, "quotes": [{k: v for k, v in q.items() if k != "rate_in_cached"}
+                                   for q in snapshot["quotes"]]}
+    assert opsig.ask_snapshot_message(snapshot, CHAIN.decimals) == \
+        opsig.ask_snapshot_message(bare, CHAIN.decimals)
 
 
 async def test_the_snapshot_signature_recovers_to_the_operator_over_the_ask_registry():
@@ -1549,7 +1575,8 @@ async def test_a_withdrawal_rides_in_the_snapshot_as_rate_out_zero():
     driver._healthy = False
     await sched.sync_asks()
     withdrawn = _quotes(chain)
-    assert withdrawn == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0"}]
+    assert withdrawn == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0",
+                               "rate_in_cached": "0"}]
     # Not an empty snapshot: an empty book is silence, and silence leaves the
     # price standing.
     assert withdrawn != []
@@ -1571,7 +1598,7 @@ async def test_a_withdrawn_slot_is_not_withdrawn_again():
     await sched.sync_asks()
     assert len(chain.snapshots) == 3
     assert _quotes(chain) == [
-        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6"}
+        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6", "rate_in_cached": "0.2"}
     ]   # the republish carries the price alone; nothing lingers as a zero
 
 
@@ -1607,7 +1634,7 @@ async def test_free_capacity_is_not_in_the_book():
     sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
     await sched.sync_asks()
     for quote in _quotes(chain):
-        assert set(quote) == {"model_id", "sla", "rate_in", "rate_out"}
+        assert set(quote) == {"model_id", "sla", "rate_in", "rate_out", "rate_in_cached"}
 
 
 async def test_shutdown_pushes_an_all_withdrawn_book():
@@ -1619,7 +1646,8 @@ async def test_shutdown_pushes_an_all_withdrawn_book():
     await sched.sync_asks()
 
     await sched.shutdown()
-    assert _quotes(chain) == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0"}]
+    assert _quotes(chain) == [{"model_id": 7, "sla": 3600, "rate_in": "0", "rate_out": "0",
+                               "rate_in_cached": "0"}]
     assert chain.published == []
 
 
@@ -3963,7 +3991,7 @@ async def test_the_published_book_never_moves_with_load():
     )
     await sched.sync_asks()
     assert _quotes(chain) == [
-        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6"}
+        {"model_id": 7, "sla": 3600, "rate_in": "0.2", "rate_out": "0.6", "rate_in_cached": "0.2"}
     ]
 
     sched._load.loads[MODEL] = 1.0

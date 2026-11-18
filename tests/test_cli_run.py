@@ -342,7 +342,7 @@ async def test_daemon_requests_capacity_publishes_and_settles():
     # `setAsks` compares that against `idOf(signer)` and skips a mismatch.
     assert snapshot["provider_id"] == PROVIDER_ID
     assert live_quotes(stack) == [{"model_id": MODEL_ID, "sla": SLA_SECS,
-                                   "rate_in": "0.2", "rate_out": "0.6"}]
+                                   "rate_in": "0.2", "rate_out": "0.6", "rate_in_cached": "0.2"}]
 
     await daemon.run_once()
     await daemon.join()
@@ -368,7 +368,8 @@ async def test_daemon_requests_capacity_publishes_and_settles():
     # Withdrawn on drain — and withdrawal is a quote at rate_out 0, not silence:
     # on chain a slot the snapshot omits keeps its price forever.
     assert stack.asks_history[-1]["quotes"] == [
-        {"model_id": MODEL_ID, "sla": SLA_SECS, "rate_in": "0", "rate_out": "0"}]
+        {"model_id": MODEL_ID, "sla": SLA_SECS, "rate_in": "0", "rate_out": "0",
+         "rate_in_cached": "0"}]
     assert live_quotes(stack) == []
 
 

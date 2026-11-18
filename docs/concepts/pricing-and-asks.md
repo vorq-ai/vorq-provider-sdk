@@ -47,6 +47,10 @@ withdrawal is explicit: a withdrawn row is published with both rates set to 0. T
 unhealthy model leaves the book, and why a graceful shutdown republishes every row at 0 rather
 than simply going quiet.
 
+Each row also carries `rate_in_cached`, the rate cached input settles at against a job at
+that ask's `rate_in`. It travels beside the signed rates, outside the signature, and the
+coordinator lists it with the ask.
+
 Asks advertise you to clients. They do not bind the chain: a claim charges the rates the client
 signed, whatever your ask says. That is what lets the daemon apply its own floor.
 

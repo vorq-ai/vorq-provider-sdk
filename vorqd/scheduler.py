@@ -159,13 +159,16 @@ def _settled_cached_rate(configured: str | None, job_rate_in: int | None, decima
     return min(parse_usd(configured, decimals), job_rate)
 
 
-def _quote(slot: tuple[int, int], rates: tuple[int, int], decimals: int) -> dict:
+def _quote(slot: tuple[int, int], rates: tuple[int, int, int], decimals: int) -> dict:
     """One ask row on the wire: the rates are money, so USD decimal strings;
-    every other member is a JSON integer."""
+    every other member is a JSON integer. ``rate_in_cached`` rides beside the
+    signed members and is not part of the signature: the node lists it with the
+    ask, and settle signs the rate actually charged."""
     model_id, sla_secs = slot
-    rate_in, rate_out = rates
+    rate_in, rate_out, rate_in_cached = rates
     return {"model_id": model_id, "sla": sla_secs,
-            "rate_in": format_usd(rate_in, decimals), "rate_out": format_usd(rate_out, decimals)}
+            "rate_in": format_usd(rate_in, decimals), "rate_out": format_usd(rate_out, decimals),
+            "rate_in_cached": format_usd(rate_in_cached, decimals)}
 
 
 def _frame_pixels(frame: dict) -> int:
@@ -378,11 +381,11 @@ class Scheduler:
         # without a store keeps them in memory, which is no resume at all.
         self._store = store or InflightStore(None)
         # The book as this daemon last pushed it: (model_id, sla_secs) -> (rate_in,
-        # rate_out), the rates as the atomic integers they were signed as. It is
+        # rate_out, rate_in_cached), atomic, the first two as they were signed. It is
         # the live set and not a name set because a withdrawal has to be *pushed*:
         # on chain the write is an upsert, so a slot a snapshot omits keeps its
         # old price forever and only a quote with both rates at 0 deletes one.
-        self._published: dict[tuple[int, int], tuple[int, int]] = {}
+        self._published: dict[tuple[int, int], tuple[int, int, int]] = {}
         # How busy each backend is. A daemon with no `load:` block anywhere gets
         # the null monitor, which answers "unknown" for every model — and unknown
         # prices exactly like busy, so the whole feature stays inert.
@@ -790,8 +793,12 @@ class Scheduler:
 
     def _desired_quotes(
         self, healthy: set[str], resolver: ModelResolver, decimals: int
-    ) -> dict[tuple[int, int], tuple[int, int]]:
-        """This daemon's whole current book: ``(model_id, sla_secs) -> (in, out)``.
+    ) -> dict[tuple[int, int], tuple[int, int, int]]:
+        """This daemon's whole current book: ``(model_id, sla_secs) -> (in, out, cached)``.
+
+        ``cached`` is the cached input rate settle would sign against a job at
+        this ask's ``rate_in`` — the configured one, never above ``rate_in``;
+        ``rate_in`` itself when none is configured.
 
         Free capacity is deliberately **not** in it. The chain's ask row is a
         price and nothing else — the registry has no capacity member — and
@@ -799,25 +806,28 @@ class Scheduler:
         contract. Republishing the book every time a slot filled would also mean
         a signed transaction per claim.
         """
-        quotes: dict[tuple[int, int], tuple[int, int]] = {}
+        quotes: dict[tuple[int, int], tuple[int, int, int]] = {}
         for model in self._config.models:
             if model.model not in healthy:
                 continue
             model_id = resolver.model_id(model.model)
             for window, rate in model.slas.items():
                 slot = (model_id, resolver.sla_secs(window))
+                rate_in = _atomic_rate(rate.rate_in, decimals, model.model, window, "rate_in")
+                # Not signed in the book — settle signs it — but held to the
+                # token's decimals here, with its siblings, rather than at a settle.
+                cached = _atomic_rate(rate.rate_in_cached, decimals, model.model, window,
+                                      "rate_in_cached")
                 quotes[slot] = (
-                    _atomic_rate(rate.rate_in, decimals, model.model, window, "rate_in"),
+                    rate_in,
                     _atomic_rate(rate.rate_out, decimals, model.model, window, "rate_out"),
+                    rate_in if rate.rate_in_cached is None else min(cached, rate_in),
                 )
-                # Not in the book — settle signs it — but held to the token's
-                # decimals here, with its siblings, rather than at a settle.
-                _atomic_rate(rate.rate_in_cached, decimals, model.model, window, "rate_in_cached")
         return quotes
 
     @staticmethod
     def _withdrawals(slots) -> list[dict]:
-        return [{"model_id": m, "sla": s, "rate_in": "0", "rate_out": "0"}
+        return [{"model_id": m, "sla": s, "rate_in": "0", "rate_out": "0", "rate_in_cached": "0"}
                 for m, s in sorted(slots)]
 
     async def _push_snapshot(self, quotes: list[dict]) -> bool:
