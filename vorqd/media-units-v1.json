@@ -7,6 +7,7 @@
     "This file also carries the three defaults that were hand-written in four repos at once (vorq/_client.py, src/units.ts, vorqd/backend.py, vorqd/scheduler.py). Same reasoning as the body ceiling: a constant repeated is a constant that drifts, and editing one copy left every suite green."
   ],
   "rules": [
+    "units_in for a text request (text or embedding: no media shape) is the byte length of its canonical JSON. It is a CEILING, not a count: text runs about four bytes a token and the JSON wrapper adds more, so it sits above the backend's prompt count, chat template included, for anything longer than a few words. Settle bills the backend's own prompt count under it; the unused part is refunded. The provider refuses to claim a text order whose units_in is below its payload bytes.",
     "frames[aspect][resolution] is [width, height] in pixels. An implementation reads it; it never computes it. Every frame in one tier is within 1% of the 16:9 frame's area, so one rate_out prices every shape of a tier alike.",
     "units_out for video is frame_pixels x duration_secs. For image it is frame_pixels x num_images. Both are exact output pixels, so one rate_out prices a per-image, a per-megapixel and a per-second backend alike.",
     "units_in for a reference-conditioned request is the sum over its PIXEL-BEARING reference assets of width x height x max(1, duration_secs): the singular reference_keys in order, then every element of reference_images and reference_videos. A still counts as one second, so rate_in prices one input pixel-second across stills and clips alike. A media request carrying no reference declares 0. A clip (video, or an element of reference_videos) must state its duration_secs, rounded UP to whole seconds: left out it would be priced as a one-second still, and the provider reads the clip's real length and hands the job back. An element of reference_audios has no pixels and counts ZERO — nothing meters it — but it is capped in number and in bytes, because it is still work the provider is handed.",
@@ -291,16 +292,16 @@
         "width": 512,
         "height": 512
       },
-      "units_in": 14,
+      "units_in": 56,
       "units_out": 256
     },
     {
       "name": "plain-text-is-untouched",
-      "why": "The overwhelming majority of orders. Canonical JSON is 17 bytes, one unit per four.",
+      "why": "The overwhelming majority of orders. Canonical JSON is 17 bytes, so units_in is 17.",
       "input": {
         "input": "hello"
       },
-      "units_in": 4,
+      "units_in": 17,
       "units_out": 4096
     },
     {
@@ -310,7 +311,7 @@
         "input": "hello"
       },
       "units_out_override": 0,
-      "units_in": 4,
+      "units_in": 17,
       "units_out": 0
     },
     {

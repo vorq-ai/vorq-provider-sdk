@@ -42,8 +42,11 @@ tier), and `user`, `metadata` (caller identifiers that would link a client's job
 **Clamps.** `reasoning_max_tokens` is clamped to below the job's output cap and `min_tokens`
 to at most the cap. A value that is not a non-negative integer is dropped.
 
-**Result.** The response object is returned as is. The settled count is
-`usage.completion_tokens`; a response without it fails the job.
+**Result.** The response object is returned as is. The settle reads `usage.prompt_tokens`,
+`usage.prompt_tokens_details.cached_tokens` (0 when absent) and `usage.completion_tokens`; a
+response without `completion_tokens` fails the job, and one without `prompt_tokens` settles at
+the order's `units_in` with a warning. A stream reads the same fields from its final usage
+chunk.
 
 ## openai-embeddings
 
@@ -57,7 +60,8 @@ to at most the cap. A value that is not a non-negative integer is dropped.
 
 **Body:** `model`, the job's `input`, `encoding_format` (the job's, default `base64`),
 `dimensions` if the job names one, and `input_type` when one applies. Chat params are not
-forwarded. The response object is returned as is, and the job settles with no output count.
+forwarded. The response object is returned as is. The settle reads `usage.prompt_tokens` and
+`usage.prompt_tokens_details.cached_tokens` (0 when absent), with no output count.
 
 ## openai-responses
 
@@ -92,7 +96,9 @@ key by key. A job with no messages or input fails before any request.
 **Result.** The finished object is converted to a chat completion: `choices[0].message.content`
 joins the `output_text` parts, `reasoning_content` carries the reasoning summary (or the raw
 reasoning text), `function_call` items become `tool_calls` with `finish_reason: "tool_calls"`,
-and `usage.output_tokens` becomes `usage.completion_tokens`.
+and the usage block is renamed: `input_tokens` becomes `prompt_tokens`,
+`input_tokens_details.cached_tokens` becomes `prompt_tokens_details.cached_tokens` and
+`output_tokens` becomes `completion_tokens`. The settle then reads them as for `openai-chat`.
 
 ## openai-batch
 
@@ -101,7 +107,8 @@ JSONL file (`POST {base_url}/files`, `purpose=batch`, `custom_id` = the job id w
 at most 64 characters), creates the batch (`POST {base_url}/batches`), and polls
 `GET {base_url}/batches/{id}` until `completed`. `failed`, `cancelled` and `expired` fail the
 job. The line is read from `GET {base_url}/files/{output_file_id}/content`; a non-200 line, a
-line in the error file, or no line fails the job without a retry. Resumable after a restart.
+line in the error file, or no line fails the job without a retry. The line's chat completion
+is the result, and its usage is read as for `openai-chat`. Resumable after a restart.
 
 | Param | Default | Meaning |
 |---|---|---|

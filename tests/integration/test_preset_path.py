@@ -10,7 +10,7 @@ from vorqd.cli import build_daemon
 from .conftest import Emulator, load_example, no_sleep
 
 
-def vllm_backend(*, completion="4", tokens=3, fail=False):
+def vllm_backend(*, completion="4", tokens=3, prompt=14, fail=False):
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path.endswith("/health"):  # readiness probe gating ask publishing
             return httpx.Response(200, json={"status": "ok"})
@@ -18,7 +18,7 @@ def vllm_backend(*, completion="4", tokens=3, fail=False):
         if fail:
             return httpx.Response(500, json={"error": "down"})
         return httpx.Response(200, json={"choices": [{"message": {"content": completion}}],
-                                         "usage": {"completion_tokens": tokens}})
+                                         "usage": {"prompt_tokens": prompt, "completion_tokens": tokens}})
 
     return handler
 
@@ -38,7 +38,7 @@ def text_job(**over):
         "rate_in": "0.3", "rate_out": "0.8",
         "expires_at": None, "claimed_at": "0", "ended_because": 0,
         "input_body": {"messages": [{"role": "user", "content": "2+2?"}], "temperature": 0.7},
-        "units_in": "5", "units_out": "64", "result_cid": None, "completion_tok": "0",
+        "units_in": "1024", "units_out": "64", "result_cid": None, "completion_tok": "0",
     }
     job.update(over)
     return job
@@ -73,6 +73,7 @@ async def test_text_job_settles_with_completion_tokens():
     emu = Emulator([text_job()], CATALOG)
     await run(emu, vllm_backend(completion="4", tokens=7))
     assert only(emu.settled)["completion_tok"] == 7
+    assert (only(emu.settled)["prompt_tok"], only(emu.settled)["cached_tok"]) == (14, 0)
     # The sealed result rides in the settle itself; nothing is filed as a /v1 file.
     assert only(emu.settled)["result"]
     assert emu.uploads == []

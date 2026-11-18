@@ -6,6 +6,27 @@ All notable changes to `vorqd` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Settle bills the backend's own usage. The `settle` op carries and signs
+  `prompt_tok`, `cached_tok`, `completion_tok` and `rate_in_cached`
+  (`Settle(bytes32 jobId,uint32 promptTok,uint32 cachedTok,uint32 completionTok,uint128 rateInCached,uint64 issuedAt)`).
+  Presets read `usage.prompt_tokens` and `usage.prompt_tokens_details.cached_tokens`
+  (Responses: `input_tokens`, `input_tokens_details.cached_tokens`); raw text
+  results may map `prompt_tokens` and `cached_tokens`. Media settles its
+  declared `units_in` as the prompt count.
+- The pre-claim input check for text and embedding now refuses an order whose
+  `units_in` (the request's canonical byte length) is below its payload size
+  less 640 bytes of envelope slack (was 16 bytes a unit plus 4096).
+
+### Added
+
+- Per-window `rate_in_cached` (USD string, at most `rate_in`; default: no discount).
+
+### Removed
+
+- `provider.max_input_bytes_per_unit`.
+
 ## [0.2.0] — 2026-11-18
 
 The first stable release. Every release from here bumps the patch version.

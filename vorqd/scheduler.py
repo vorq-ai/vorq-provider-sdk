@@ -148,6 +148,17 @@ def _atomic_rate(value: str | None, decimals: int, model: str, window: str, fiel
     return units
 
 
+def _settled_cached_rate(configured: str | None, job_rate_in: int | None, decimals: int) -> int:
+    """The atomic ``rateInCached`` a settle signs: the SLA's configured cached
+    rate, never above the job's own ``rate_in``; the job's ``rate_in`` itself
+    when none is configured (no discount). The loader and the book build have
+    already held ``configured`` to the grammar and the token's decimals."""
+    job_rate = int(job_rate_in or 0)
+    if configured is None:
+        return job_rate
+    return min(parse_usd(configured, decimals), job_rate)
+
+
 def _quote(slot: tuple[int, int], rates: tuple[int, int], decimals: int) -> dict:
     """One ask row on the wire: the rates are money, so USD decimal strings;
     every other member is a JSON integer."""
@@ -799,6 +810,9 @@ class Scheduler:
                     _atomic_rate(rate.rate_in, decimals, model.model, window, "rate_in"),
                     _atomic_rate(rate.rate_out, decimals, model.model, window, "rate_out"),
                 )
+                # Not in the book — settle signs it — but held to the token's
+                # decimals here, with its siblings, rather than at a settle.
+                _atomic_rate(rate.rate_in_cached, decimals, model.model, window, "rate_in_cached")
         return quotes
 
     @staticmethod
@@ -989,21 +1003,15 @@ class Scheduler:
             # `modality` is the sweep's own, from the model being polled for:
             # `job.modality` is still the placeholder here and would read a media
             # bid as text.
-            short = input_shortfall(
-                job, sealed_plaintext_bytes(len(container)),
-                bytes_per_unit=self._config.provider.max_input_bytes_per_unit,
-                modality=modality,
-            )
+            short = input_shortfall(job, sealed_plaintext_bytes(len(container)), modality=modality)
             if short:
                 # Permanent: the bytes are content-addressed and `units_in` is a
                 # signed order term, so no later sweep can answer differently —
                 # and without the shelf this job is re-fetched from the gateway
                 # every sweep until it expires.
                 self._defer(job, permanent=True)
-                log.info("not claiming %s: its declared %s input units do not cover the payload "
-                         "it carries (%s bytes past what they buy at %s bytes/unit)",
-                         job.job_id, job.units_in, short,
-                         self._config.provider.max_input_bytes_per_unit)
+                log.info("not claiming %s: its declared %s input units are %s short of the "
+                         "payload it carries", job.job_id, job.units_in, short)
                 continue
             if not await self._claim(job):
                 continue
@@ -1409,14 +1417,11 @@ class Scheduler:
         # build that never checked. Re-checked at the point of use for the same
         # reason `_open_task` re-verifies the commitment the fetch already
         # verified.
-        short = input_shortfall(job, len(plaintext),
-                                bytes_per_unit=self._config.provider.max_input_bytes_per_unit,
-                                modality=job.modality)
+        short = input_shortfall(job, len(plaintext), modality=job.modality)
         if short:
             raise PayloadError(
                 "units_in_short",
-                f"the envelope runs {short} bytes past what its declared {job.units_in} input "
-                f"units buy at {self._config.provider.max_input_bytes_per_unit} bytes/unit",
+                f"the declared {job.units_in} input units are {short} short of the envelope",
             )
         result_key = env.get("result_key")
         if not result_key or not isinstance(result_key, str):
@@ -1609,7 +1614,16 @@ class Scheduler:
                 # this only ever clamps a too-large one.
                 completion_tokens = min(completion_tokens, job.units_out)
             completion_tok = int(completion_tokens or 0)
-            answer = await self._settle(job, result_bytes, completion_tok)
+            prompt_tok, cached_tok = self._prompt_usage(job, model, normalized)
+            # A claim inherited at boot may be in a window this config no longer
+            # serves; it settles with no cached discount.
+            sla_rate = model.slas.get(job.sla)
+            answer = await self._settle(job, result_bytes, {
+                "prompt_tok": prompt_tok,
+                "cached_tok": cached_tok,
+                "completion_tok": completion_tok,
+                "rate_in_cached": sla_rate.rate_in_cached if sla_rate is not None else None,
+            })
             if answer is None:
                 return
             result_cid = answer.result_cid
@@ -1666,7 +1680,37 @@ class Scheduler:
             self._throttles[model.model].drop()
             self._metrics.set_capacity_free(max(0, self._slots() - self._inflight))
 
-    async def _settle(self, job, result_bytes: bytes, completion_tok: int):
+    @staticmethod
+    def _prompt_usage(job, model, normalized) -> tuple[int, int]:
+        """``(prompt_tok, cached_tok)`` this job settles: the backend's own counts.
+
+        Media bills its declared reference units, so the prompt count is the
+        order's ``units_in`` and nothing is cached. A token backend that reports
+        no prompt count settles at ``units_in`` — the ceiling the client already
+        escrowed — with a warning, never a failed job. A reported count above
+        ``units_in`` is logged at error (the pre-claim guard let through an order
+        it should have refused) and clamped, as the chain would clamp it; the
+        cached part is clamped to the prompt count the same way.
+        """
+        units_in = int(job.units_in or 0)
+        if normalized.kind == "media":
+            return units_in, 0
+        prompt = normalized.prompt_tokens
+        if not isinstance(prompt, int) or isinstance(prompt, bool) or prompt < 0:
+            log.warning("backend reported no prompt token count for %s; settling at units_in",
+                        model.model, extra={"job_id": job.job_id})
+            prompt = units_in
+        elif prompt > units_in:
+            log.error("backend prompt count %s exceeds the order's units_in %s for %s; the "
+                      "pre-claim input guard is too loose", prompt, units_in, model.model,
+                      extra={"job_id": job.job_id})
+            prompt = units_in
+        cached = normalized.cached_tokens
+        if not isinstance(cached, int) or isinstance(cached, bool) or cached < 0:
+            cached = 0
+        return prompt, min(cached, prompt)
+
+    async def _settle(self, job, result_bytes: bytes, usage: dict):
         """Deliver a finished job, retrying until the SLA closes.
 
         The work is done and paid for at the backend, and the node is the only
@@ -1675,6 +1719,12 @@ class Scheduler:
         a settle that mined reverted and a ``StaleOp`` are each retried under a
         fresh ``issued_at`` — the time is inside the signature, so every attempt
         is signed again. An upload the node no longer holds is uploaded again.
+
+        ``usage`` holds ``prompt_tok``, ``cached_tok`` and ``completion_tok``
+        and the SLA's configured ``rate_in_cached`` (USD, or ``None`` for no
+        discount). The cached rate settles at ``min(configured, job rate_in)``:
+        it goes on the wire as USD and into the signature as the same value,
+        atomic.
 
         Returns the node's answer once a settle lands — or the job row, when a
         retry finds an earlier attempt already settled it — and ``None`` when it
@@ -1704,11 +1754,15 @@ class Scheduler:
                 # freshness, and a large result on a slow uplink would otherwise
                 # arrive already stale.
                 issued_at = int(self._clock())
+                rate_in_cached = _settled_cached_rate(usage["rate_in_cached"], job.rate_in, ctx.decimals)
                 answer = await self._push(
                     "settle",
-                    {"job_id": job.job_id, "completion_tok": completion_tok,
+                    {"job_id": job.job_id, "prompt_tok": usage["prompt_tok"],
+                     "cached_tok": usage["cached_tok"], "completion_tok": usage["completion_tok"],
+                     "rate_in_cached": format_usd(rate_in_cached, ctx.decimals),
                      "issued_at": issued_at, **result_field},
-                    self.ops.sign_settle(job.job_id, completion_tok, issued_at, ctx),
+                    self.ops.sign_settle(job.job_id, usage["prompt_tok"], usage["cached_tok"],
+                                         usage["completion_tok"], rate_in_cached, issued_at, ctx),
                 )
                 if self._landed(answer, "settle", job.job_id):
                     return answer
@@ -1971,7 +2025,7 @@ class Scheduler:
             # Settles at zero, and that is the correct bill rather than a missing one. An
             # embeddings backend reports `usage.prompt_tokens` and no completion count — the
             # output size is a property of the model, not of the request — so the charge is
-            # `rate_in * units_in` and `_atomicCharge` multiplies the output leg by 0. The text
+            # the input leg on the backend's prompt count and the output leg is 0. The text
             # branch below fails closed on a missing count for exactly the opposite reason: there
             # it means the backend did not say what it produced.
             content = self._stamped(normalized.raw if normalized.raw is not None else {},

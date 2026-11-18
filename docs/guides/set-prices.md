@@ -19,6 +19,9 @@ Each entry under `slas` publishes one ask: a window and its rates.
   and so is a rate with more fraction digits than the payment token holds (6 for USDC).
 - `rate_out` is required on every window. `rate_in` is omitted on a model that meters no input
   side, such as a text-to-image model.
+- `rate_in_cached` is optional: the rate for prompt tokens the backend reports as cached, at
+  most `rate_in`. Absent, cached tokens cost `rate_in`. It is not published; it is signed into
+  each settle.
 
 The units depend on the modality: tokens for `text` and `embedding`, output pixels for
 `image`, output pixel-seconds for `video`. See

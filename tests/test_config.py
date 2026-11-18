@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from vorqd.config import (MAX_INPUT_BYTES_PER_UNIT, PricingConfig, load_config,
-                          resolve_env)
+from vorqd.config import PricingConfig, load_config, resolve_env
 from vorqd.errors import ConfigError
 
 EXAMPLES = Path(__file__).parents[1] / "docs" / "examples"
@@ -1268,40 +1267,78 @@ models:
     assert over.response["result"] == {"text": "$.a", "completion_tokens": "$.n"}
 
 
-# -- max_input_bytes_per_unit: the floor under a client-declared units_in -------
+# -- rate_in_cached: the per-SLA price of a cached prompt token -----------------
 
 
-def test_input_bytes_per_unit_defaults_to_the_module_constant(tmp_path):
-    # Against the constant, never against the literal: the default is a policy
-    # decision recorded in one place, and a test repeating the number would let
-    # the two drift apart while staying green.
-    cfg = load_config(write(tmp_path, MINIMAL))
-    assert cfg.provider.max_input_bytes_per_unit == MAX_INPUT_BYTES_PER_UNIT
+def _with_cached(rates: str) -> str:
+    return MINIMAL.replace('"1h": { rate_out: "0.1" }', f'"1h": {{ {rates} }}')
 
 
-def test_input_bytes_per_unit_is_read_from_the_provider_block(tmp_path):
-    cfg = MINIMAL.replace("  capacity: 1\n", "  capacity: 1\n  max_input_bytes_per_unit: 8\n")
-    assert load_config(write(tmp_path, cfg)).provider.max_input_bytes_per_unit == 8
+def test_rate_in_cached_is_optional_and_none_means_no_discount(tmp_path):
+    rate = load_config(write(tmp_path, _with_cached('rate_in: "0.2", rate_out: "0.1"'))).models[0].slas["1h"]
+    assert rate.rate_in_cached is None
 
 
-def test_zero_bytes_per_unit_is_valid_and_turns_the_guard_off(tmp_path):
-    cfg = MINIMAL.replace("  capacity: 1\n", "  capacity: 1\n  max_input_bytes_per_unit: 0\n")
-    assert load_config(write(tmp_path, cfg)).provider.max_input_bytes_per_unit == 0
+def test_rate_in_cached_is_read_verbatim(tmp_path):
+    text = _with_cached('rate_in: "0.2", rate_in_cached: "0.05", rate_out: "0.1"')
+    assert load_config(write(tmp_path, text)).models[0].slas["1h"].rate_in_cached == "0.05"
 
 
-@pytest.mark.parametrize("value", ["-1", "4.5", "true", "lots"])
-def test_a_bytes_per_unit_that_is_not_a_count_is_refused_naming_the_key(tmp_path, value):
-    cfg = MINIMAL.replace("  capacity: 1\n",
-                          f"  capacity: 1\n  max_input_bytes_per_unit: {value}\n")
-    with pytest.raises(ConfigError, match="max_input_bytes_per_unit"):
-        load_config(write(tmp_path, cfg))
+@pytest.mark.parametrize("cached", ['"0.2"', '"0"'])
+def test_rate_in_cached_up_to_rate_in_is_accepted(tmp_path, cached):
+    text = _with_cached(f'rate_in: "0.2", rate_in_cached: {cached}, rate_out: "0.1"')
+    assert load_config(write(tmp_path, text)).models[0].slas["1h"].rate_in_cached == cached.strip('"')
 
 
-def test_input_bytes_per_unit_from_the_environment_reads_as_a_number(tmp_path, monkeypatch):
-    monkeypatch.setenv("VORQ_BPU", "8")
-    cfg = MINIMAL.replace("  capacity: 1\n",
-                          "  capacity: 1\n  max_input_bytes_per_unit: env:VORQ_BPU\n")
-    assert load_config(write(tmp_path, cfg)).provider.max_input_bytes_per_unit == 8
+def test_rate_in_cached_above_rate_in_is_refused(tmp_path):
+    text = _with_cached('rate_in: "0.2", rate_in_cached: "0.200001", rate_out: "0.1"')
+    with pytest.raises(ConfigError, match="rate_in_cached.*exceeds"):
+        load_config(write(tmp_path, text))
+
+
+def test_rate_in_cached_without_rate_in_is_refused(tmp_path):
+    text = _with_cached('rate_in_cached: "0.01", rate_out: "0.1"')
+    with pytest.raises(ConfigError, match="rate_in_cached"):
+        load_config(write(tmp_path, text))
+
+
+@pytest.mark.parametrize("cached", ["0.05", '"-0.05"', '"abc"', '"0.1e-2"'])
+def test_rate_in_cached_must_be_a_usd_string(tmp_path, cached):
+    text = _with_cached(f'rate_in: "0.2", rate_in_cached: {cached}, rate_out: "0.1"')
+    with pytest.raises(ConfigError, match="rate_in_cached"):
+        load_config(write(tmp_path, text))
+
+
+# -- raw text results: the optional usage paths -----------------------------------
+
+
+RAW = MINIMAL.replace("""      preset: openai-chat
+      base_url: http://localhost:8000/v1
+      model: runtime-model
+""", """      request: { method: POST, url: http://x, body: {} }
+      response:
+        mode: sync
+        result: RESULT
+""")
+
+
+def test_raw_text_result_maps_prompt_and_cached_paths(tmp_path):
+    text = RAW.replace("RESULT", '{ text: "$.a", completion_tokens: "$.n", '
+                                 'prompt_tokens: "$.p", cached_tokens: "$.c" }')
+    result = load_config(write(tmp_path, text)).models[0].backend.response["result"]
+    assert (result["prompt_tokens"], result["cached_tokens"]) == ("$.p", "$.c")
+
+
+def test_raw_usage_path_must_be_a_jsonpath(tmp_path):
+    text = RAW.replace("RESULT", '{ text: "$.a", completion_tokens: "$.n", prompt_tokens: "p" }')
+    with pytest.raises(ConfigError, match="prompt_tokens"):
+        load_config(write(tmp_path, text))
+
+
+def test_raw_usage_path_on_a_media_result_is_refused(tmp_path):
+    text = RAW.replace("RESULT", '{ media_urls: "$.u", prompt_tokens: "$.p" }')
+    with pytest.raises(ConfigError, match="prompt_tokens.*'text'"):
+        load_config(write(tmp_path, text))
 
 
 # -- backend.reference.accept: which reference types this backend takes ---------

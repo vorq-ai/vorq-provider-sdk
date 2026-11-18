@@ -17,7 +17,6 @@ from vorqd.blob import BlobError, BlobResolver, MemoryBlobSource
 from .conftest import fake_cid, job_id_of, seal_container
 from vorqd.config import (
     FAIL_GRACE_SECONDS,
-    MAX_INPUT_BYTES_PER_UNIT,
     BackendConfig,
     LoadProbeConfig,
     ModelConfig,
@@ -27,6 +26,7 @@ from vorqd.config import (
     VorqdConfig,
 )
 from vorqd.backend import ENVELOPE_SLACK_BYTES, input_shortfall
+from vorqd.money import parse_usd
 from vorqd.container import MIN_CONTAINER_BYTES, derive_dek, sealed_plaintext_bytes
 from vorqd.errors import (
     BackendError,
@@ -40,7 +40,7 @@ from vorqd.errors import (
 )
 from vorqd.escrow import ReleaseRefused
 from vorqd.node import CatalogModel, ClaimSimulation, OpResult
-from vorqd.scheduler import Scheduler
+from vorqd.scheduler import Scheduler, _settled_cached_rate
 from vorqd.state import InflightStore
 from vorqd.types import INLINE_MAX_BYTES, ChainContext, EvmJob
 
@@ -67,6 +67,11 @@ MODEL = "deepseek-ai/deepseek-v4-pro:fp8"
 #: so the output leg prices to nothing and ``rate_in · units_in`` is all the
 #: provider is ever paid.
 EMBED_MODEL = "baai/bge-m3:fp16"
+
+#: A text order's declared input ceiling: the shipped clients declare the
+#: input's canonical bytes, so a short prompt clears the pre-claim guard with
+#: this and settles its prompt count under it.
+TEXT_UNITS_IN = 1024
 
 
 
@@ -145,6 +150,7 @@ class FakeNode:
         self.job_queries: list[dict] = []
         self.simulations: list[tuple[str, str]] = []
         self.settled = []
+        self.settle_payloads = []
         self.failed = []
         self.snapshots: list[tuple[dict, str]] = []
         self.minted: list[str] = []
@@ -266,6 +272,7 @@ class FakeNode:
                 # row is untouched: a reverted settle leaves the job Claimed.
                 return OpResult(tx_hash="0x" + "22" * 32, status="reverted", block_number=2)
             self.settled.append((job_id, payload.get("result"), payload.get("completion_tok")))
+            self.settle_payloads.append(dict(payload))
             self._jobs[job_id].state = "Settled"
             # The node pins the delivered bytes and mints the name; the claimant
             # learns it from this answer and from nowhere else, because nothing
@@ -337,6 +344,11 @@ class FakeCoord:
         pass
 
 
+#: What :class:`FakeDriver`'s backend reports as its own usage.
+FAKE_PROMPT_TOKENS = 30
+FAKE_CACHED_TOKENS = 12
+
+
 class FakeDriver:
     def __init__(self, *, healthy=True, on_run=None):
         self._healthy = healthy
@@ -349,7 +361,9 @@ class FakeDriver:
         self.last_timeout_s = timeout_s
         if self._on_run:
             self._on_run(job)
-        return Normalized(kind="text", text="answer", completion_tokens=42, raw={"choices": []})
+        return Normalized(kind="text", text="answer", completion_tokens=42,
+                          prompt_tokens=FAKE_PROMPT_TOKENS, cached_tokens=FAKE_CACHED_TOKENS,
+                          raw={"choices": []})
 
     async def healthy(self):
         return self._healthy
@@ -528,14 +542,13 @@ _TEST_WALLET_KEY = "0x" + "4a" * 32
 
 
 def make_config(models, capacity=4, *, box_key=_TEST_BOX_KEY, poll_interval_s=5,
-                pricing=None, bid_filter=None, max_input_bytes_per_unit=MAX_INPUT_BYTES_PER_UNIT):
+                pricing=None, bid_filter=None):
     return VorqdConfig(
         provider=ProviderConfig(wallet_key=_TEST_WALLET_KEY, box_key=box_key, api_url="http://x",
                                 capacity=capacity, safety_margin_s=60,
                                 poll_interval_s=poll_interval_s,
                                 pricing=pricing or PricingConfig(),
-                                bid_filter=bid_filter or {},
-                                max_input_bytes_per_unit=max_input_bytes_per_unit),
+                                bid_filter=bid_filter or {}),
         models=models,
     )
 
@@ -590,7 +603,7 @@ def open_text_job(tag="job_1", rate_out=600_000, rate_in=200_000, sla="1h",
     # a job id is now a fact about its bytes, never a chosen label.
     job_id, task_cid = pin_task({"input": f"hi {tag}"}, owner=owner, result_key=result_key)
     return EvmJob(job_id=job_id, model=model, state="Open", sla=sla, created_at=1000,
-                  owner=owner, rate_in=rate_in, rate_out=rate_out, units_in=10, units_out=128,
+                  owner=owner, rate_in=rate_in, rate_out=rate_out, units_in=TEXT_UNITS_IN, units_out=128,
                   task_cid=task_cid)
 
 
@@ -599,7 +612,7 @@ def designated_text_job(tag="designated", *, box=None, provider=PROVIDER_ID, mod
     daemon opens the container in-process and the escrow is never in the path."""
     job_id, task_cid = pin_task({"input": f"hi {tag}"}, recipient=(box or DAEMON_BOX).public_key)
     return EvmJob(job_id=job_id, model=model, state="Open", sla="1h", created_at=1000,
-                  owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=10, units_out=128,
+                  owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=TEXT_UNITS_IN, units_out=128,
                   task_cid=task_cid, designated=provider)
 
 
@@ -679,7 +692,7 @@ async def test_a_labelled_job_settles_with_its_label_still_on_it():
     clock = Clock()
     job_id, task_cid = pin_task({"input": "hi labelled"}, custom_id="req-7")
     job = EvmJob(job_id=job_id, model=MODEL, state="Open", sla="1h", created_at=1000,
-                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=10,
+                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=TEXT_UNITS_IN,
                  units_out=128, task_cid=task_cid)
     chain = FakeNode([job], clock)
     sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
@@ -870,7 +883,7 @@ async def test_an_honestly_declared_payload_is_claimed_and_settles():
     Sized at 200 KB so it is the declaration, not the payload, doing the work.
     """
     clock = Clock()
-    job = underdeclared_text_job(units_in=200_000 // 4)
+    job = underdeclared_text_job(units_in=200_000 + 12)   # len(canonical({"input": ...}))
     chain = FakeNode([job], clock)
     sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
     await sched.run_once()
@@ -941,32 +954,21 @@ async def test_a_media_bid_that_prices_its_input_is_still_never_judged_by_weight
     assert [s[0] for s in chain.settled] == [job.job_id]
 
 
-async def test_an_operator_who_turns_the_guard_off_claims_the_bid_anyway():
-    clock = Clock()
-    job = underdeclared_text_job()
-    chain = FakeNode([job], clock)
-    sched = make_scheduler(make_config([text_model()], max_input_bytes_per_unit=0),
-                           chain, FakeDriver(), clock)
-    await sched.run_once()
-    await sched.join()
-
-    assert [s[0] for s in chain.settled] == [job.job_id]
-
-
 async def test_the_shipped_clients_declaration_clears_the_floor_at_every_size():
     """The drift test, and the reason the daemon does not reproduce the formula.
 
     It builds the envelope exactly as a client does, declares `units_in` exactly
-    as both SDKs do — `max(1, len(canonical(input)) // 4)` — and asserts the floor
-    forgives it at every size and with or without a label. This is the one test
-    that fails if either SDK changes its divisor, if the envelope grows a field,
-    or if the container's own framing drifts.
+    as both SDKs do — `len(canonical(input))` — and asserts the guard forgives it
+    at every size, with no label, a plain 64-character one, and one at its worst
+    JSON size (64 control characters, six bytes each). This is the
+    one test that fails if either SDK changes its declaration, if the envelope
+    grows a field, or if the container's own framing drifts.
     """
     for size in (1, 1024, 64 * 1024, 1024 * 1024):
-        for custom_id in (None, "x" * 256):
+        for custom_id in (None, "x" * 64, "\x00" * 64):
             payload = {"input": "y" * size}
-            declared = max(1, len(json.dumps(payload, sort_keys=True,
-                                             separators=(",", ":")).encode()) // 4)
+            declared = len(json.dumps(payload, sort_keys=True,
+                                      separators=(",", ":")).encode())
             _, task_cid = pin_task(payload, custom_id=custom_id)
             container = await SOURCE.get(task_cid)
             job = EvmJob(job_id="j", model=MODEL, state="Open", sla="1h", created_at=0,
@@ -974,8 +976,25 @@ async def test_the_shipped_clients_declaration_clears_the_floor_at_every_size():
                          units_in=declared, units_out=128)
 
             assert input_shortfall(job, sealed_plaintext_bytes(len(container)),
-                                   bytes_per_unit=MAX_INPUT_BYTES_PER_UNIT,
                                    modality="text") == 0, (size, custom_id)
+
+
+async def test_the_guard_refuses_one_unit_under_the_boundary_and_accepts_at_it():
+    """The boundary, through the sweep: `units_in` equal to the payload estimate
+    claims; one unit fewer is never claimed."""
+    payload_size = 200_000
+    _, probe_cid = pin_task({"input": "x" * payload_size})
+    carried = sealed_plaintext_bytes(len(await SOURCE.get(probe_cid)))
+    boundary = carried - ENVELOPE_SLACK_BYTES
+
+    for units_in, claims in ((boundary, True), (boundary - 1, False)):
+        clock = Clock()
+        job = underdeclared_text_job(f"edge-{units_in}", units_in=units_in, size=payload_size)
+        chain = FakeNode([job], clock)
+        sched = make_scheduler(make_config([text_model()]), chain, FakeDriver(), clock)
+        await sched.run_once()
+        await sched.join()
+        assert bool(chain.settled) is claims, units_in
 
 
 async def test_unknown_sla_window_skipped():
@@ -1803,7 +1822,7 @@ async def test_a_designated_bid_opens_with_this_daemons_own_box_key():
     client = BoxCipher.generate()       # the key the client put in its envelope
     job_id, cid = pin_task({"input": "hi"}, result_key=client.public_key, recipient=box.public_key)
     job = EvmJob(job_id=job_id, model=MODEL, state="Open", sla="1h", created_at=1000,
-                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=10, units_out=128,
+                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=TEXT_UNITS_IN, units_out=128,
                  task_cid=cid, designated=PROVIDER_ID)
 
     chain = FakeNode([job], clock)
@@ -2097,7 +2116,7 @@ async def test_the_designated_path_derives_the_key_and_never_uses_the_seed(caplo
     seed = bytes(range(32))
     job_id, cid = pin_task({"input": "hi"}, recipient=box.public_key, seed=seed)
     job = EvmJob(job_id=job_id, model=MODEL, state="Open", sla="1h", created_at=1000,
-                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=10, units_out=128,
+                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=TEXT_UNITS_IN, units_out=128,
                  task_cid=cid, designated=PROVIDER_ID)
     chain = FakeNode([job], clock)
     config = make_config([text_model()])
@@ -2125,7 +2144,7 @@ async def test_a_designated_container_sealed_under_another_owner_does_not_open()
     stranger = "0x" + "44" * 20
     job_id, cid = pin_task({"input": "hi"}, recipient=box.public_key, sealed_to_owner=stranger)
     job = EvmJob(job_id=job_id, model=MODEL, state="Open", sla="1h", created_at=1000,
-                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=10, units_out=128,
+                 owner=OWNER, rate_in=200_000, rate_out=600_000, units_in=TEXT_UNITS_IN, units_out=128,
                  task_cid=cid, designated=PROVIDER_ID)
     chain = FakeNode([job], clock)
     metrics = FakeMetrics()
@@ -2175,7 +2194,7 @@ async def test_scheduler_refuses_mis_owned_envelope():
     job_id, cid = pin_task({"input": "secret"}, owner=victim, sealed_to_owner=attacker)
     job = EvmJob(job_id=job_id_of(attacker, SOURCE._blobs[cid]), model=MODEL, state="Open",
                  sla="1h", created_at=1000, owner=attacker, rate_in=200_000, rate_out=600_000,
-                 units_in=10, units_out=128, task_cid=cid)
+                 units_in=TEXT_UNITS_IN, units_out=128, task_cid=cid)
 
     chain = FakeNode([job], clock)
     metrics = FakeMetrics()
@@ -2228,7 +2247,7 @@ async def test_a_container_sealed_under_another_owner_does_not_decrypt():
     lifted = SOURCE._blobs[cid]
     job = EvmJob(job_id=job_id_of(attacker, lifted), model=MODEL, state="Open", sla="1h",
                  created_at=1000, owner=attacker, rate_in=200_000, rate_out=600_000,
-                 units_in=10, units_out=128, task_cid=cid)
+                 units_in=TEXT_UNITS_IN, units_out=128, task_cid=cid)
     chain = FakeNode([job], clock)
     metrics = FakeMetrics()
     driver = FakeDriver()
@@ -2256,7 +2275,8 @@ async def test_settle_is_one_op_carrying_the_bytes_and_naming_no_cid(caplog):
         await sched.join()
 
     (payload,) = chain.pushed("settle")
-    assert set(payload) == {"job_id", "completion_tok", "result", "issued_at"}
+    assert set(payload) == {"job_id", "prompt_tok", "cached_tok", "completion_tok",
+                            "rate_in_cached", "result", "issued_at"}
     assert payload["issued_at"] == int(clock())
     # Nothing in the op, and nothing in what its signature covers, is a name.
     assert not any("cid" in key.lower() for key in payload)
@@ -2273,6 +2293,120 @@ async def test_settle_is_one_op_carrying_the_bytes_and_naming_no_cid(caplog):
     assert chain.minted == ["bafkrei-minted-1"]
     settled = [r for r in caplog.records if r.getMessage() == "settled"]
     assert [r.result_cid for r in settled] == ["bafkrei-minted-1"]
+
+
+# --- the usage a settle carries and signs ------------------------------------
+
+
+class UsageDriver(FakeDriver):
+    """A text backend reporting exactly the usage it is built with."""
+
+    def __init__(self, *, prompt=None, cached=None, completion=42, kind="text"):
+        super().__init__()
+        self._usage = (prompt, cached, completion)
+        self._kind = kind
+
+    async def run(self, job, input, *, timeout_s=None):
+        prompt, cached, completion = self._usage
+        if self._kind == "embedding":
+            return Normalized(kind="embedding", prompt_tokens=prompt, cached_tokens=cached,
+                              raw={"data": []})
+        return Normalized(kind="text", text="a", completion_tokens=completion,
+                          prompt_tokens=prompt, cached_tokens=cached, raw={"choices": []})
+
+
+async def _settled_with(driver, *, model=None, job=None):
+    clock = Clock()
+    job = job or open_text_job("usage")
+    chain = FakeNode([job], clock)
+    sched = make_scheduler(make_config([model or text_model()]), chain, driver, clock)
+    await sched.run_once()
+    await sched.join()
+    (payload,) = chain.settle_payloads
+    (_, _, signature) = [op for op in chain.ops if op[0] == "settle"][0]
+    return sched, job, payload, signature, await chain.chain_context()
+
+
+def _signed_usage(sched, job, payload, signature, ctx) -> bool:
+    """The signature covers the payload's usage, the cached rate as atomic."""
+    return signature == sched.ops.sign_settle(
+        job.job_id, payload["prompt_tok"], payload["cached_tok"], payload["completion_tok"],
+        parse_usd(payload["rate_in_cached"], ctx.decimals), payload["issued_at"], ctx)
+
+
+async def test_settle_carries_and_signs_the_backends_own_prompt_and_cached_counts():
+    sched, job, payload, sig, ctx = await _settled_with(UsageDriver(prompt=900, cached=300, completion=50))
+    assert (payload["prompt_tok"], payload["cached_tok"], payload["completion_tok"]) == (900, 300, 50)
+    # No `rate_in_cached` configured: cached input settles at the job's own rate_in.
+    assert payload["rate_in_cached"] == "0.2"
+    assert _signed_usage(sched, job, payload, sig, ctx)
+
+
+async def test_a_backend_reporting_no_cached_count_settles_none_as_cached():
+    _, _, payload, _, _ = await _settled_with(UsageDriver(prompt=40))
+    assert (payload["prompt_tok"], payload["cached_tok"]) == (40, 0)
+
+
+async def test_a_token_backend_reporting_no_prompt_count_settles_at_units_in_with_a_warning(caplog):
+    with caplog.at_level(logging.WARNING):
+        _, job, payload, _, _ = await _settled_with(UsageDriver(prompt=None, cached=5))
+    assert payload["prompt_tok"] == job.units_in
+    assert payload["cached_tok"] == 5
+    assert any("no prompt token count" in r.getMessage() and MODEL in r.getMessage()
+               for r in caplog.records if r.levelno == logging.WARNING)
+
+
+async def test_a_prompt_count_over_units_in_is_logged_at_error_and_clamped(caplog):
+    with caplog.at_level(logging.ERROR):
+        _, job, payload, _, _ = await _settled_with(
+            UsageDriver(prompt=TEXT_UNITS_IN + 5, cached=TEXT_UNITS_IN + 5))
+    assert payload["prompt_tok"] == job.units_in
+    assert payload["cached_tok"] == job.units_in        # never above the prompt count
+    assert any("exceeds the order's units_in" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.ERROR)
+
+
+async def test_an_embedding_settles_its_prompt_count_and_no_output():
+    model = ModelConfig(model=EMBED_MODEL, modality="embedding",
+                        slas={"1h": SlaRate(rate_in="0.2", rate_out="0")},
+                        backend=BackendConfig(preset="openai-embeddings",
+                                              params={"base_url": "http://r/v1", "model": "e"}))
+    job = open_text_job("embed", rate_out=0)
+    job.model = EMBED_MODEL
+    _, _, payload, _, _ = await _settled_with(UsageDriver(prompt=77, kind="embedding"),
+                                              model=model, job=job)
+    assert (payload["prompt_tok"], payload["cached_tok"], payload["completion_tok"]) == (77, 0, 0)
+
+
+@pytest.mark.parametrize(("configured", "job_rate_in", "signed"), [
+    ("0.05", 200_000, "0.05"),     # the operator's discount
+    (None, 250_000, "0.25"),       # none configured: the job's own rate_in, no discount
+])
+async def test_the_signed_cached_rate_is_the_configured_one_or_the_jobs_rate_in(
+        configured, job_rate_in, signed):
+    model = ModelConfig(model=MODEL, slas={"1h": SlaRate(rate_in="0.2", rate_out="0.6",
+                                                         rate_in_cached=configured)},
+                        backend=BackendConfig(preset="openai-chat",
+                                              params={"base_url": "http://r/v1", "model": "rt"}))
+    job = open_text_job("cached-rate", rate_in=job_rate_in)
+    sched, job, payload, sig, ctx = await _settled_with(UsageDriver(prompt=10, cached=4),
+                                                        model=model, job=job)
+    assert payload["rate_in_cached"] == signed
+    assert _signed_usage(sched, job, payload, sig, ctx)
+
+
+def test_the_signed_cached_rate_never_exceeds_the_jobs_rate_in():
+    assert _settled_cached_rate("0.2", 150_000, 6) == 150_000
+    assert _settled_cached_rate("0.1", 150_000, 6) == 100_000
+    assert _settled_cached_rate(None, None, 6) == 0      # a window metering no input
+
+
+async def test_a_media_job_settles_its_declared_units_in_as_the_prompt_count():
+    sched = make_scheduler(make_config([text_model()]), FakeNode([], Clock()), FakeDriver(), Clock())
+    job = open_text_job("media-usage")
+    job.units_in = 4096
+    assert sched._prompt_usage(job, text_model(), Normalized(kind="media", prompt_tokens=9,
+                                                               cached_tokens=3)) == (4096, 0)
 
 
 async def test_a_result_at_the_inline_bound_settles_inline():
@@ -2362,10 +2496,10 @@ async def test_the_settle_is_stamped_after_the_upload_not_before_it():
     # second clock read would be invisible to the assertion above alone.
     (_, _, signature) = [op for op in chain.ops if op[0] == "settle"][0]
     ctx = await chain.chain_context()
-    assert signature == sched.ops.sign_settle(job.job_id, payload["completion_tok"],
-                                              payload["issued_at"], ctx)
-    assert signature != sched.ops.sign_settle(job.job_id, payload["completion_tok"],
-                                              payload["issued_at"] - 660, ctx)
+    usage = (payload["prompt_tok"], payload["cached_tok"], payload["completion_tok"],
+             parse_usd(payload["rate_in_cached"], ctx.decimals))
+    assert signature == sched.ops.sign_settle(job.job_id, *usage, payload["issued_at"], ctx)
+    assert signature != sched.ops.sign_settle(job.job_id, *usage, payload["issued_at"] - 660, ctx)
 
 
 async def test_a_413_on_the_upload_is_reported_as_result_too_large():
@@ -3361,7 +3495,7 @@ async def test_a_job_the_pre_claim_gate_admitted_is_never_failed_after_decryptio
     _, probe_cid = pin_task({"input": "x" * payload_size})
     carried = sealed_plaintext_bytes(len(await SOURCE.get(probe_cid)))
     # The smallest declaration the gate accepts for this payload, exactly.
-    tightest = -(-(carried - ENVELOPE_SLACK_BYTES) // MAX_INPUT_BYTES_PER_UNIT)
+    tightest = carried - ENVELOPE_SLACK_BYTES
 
     job = underdeclared_text_job(units_in=tightest, size=payload_size)
     chain = FakeNode([job], clock)

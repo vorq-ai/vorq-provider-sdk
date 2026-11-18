@@ -21,9 +21,21 @@ a unit of work is depends on the model's modality:
 Pricing media by the pixel lets one model id price every size, and lets a per-image,
 per-megapixel or per-second backend be quoted on the same scale.
 
-The client signs the rates and the unit counts into its order. At settlement the chain charges
-from the signed rates, the input units the client declared and the output units the provider
-reports, never above the order's cap.
+The client signs the rates and the unit ceilings into its order. For text and embedding,
+`units_in` is the request's canonical JSON byte length: a ceiling, not a count. Text runs
+about four bytes a token, so it sits above the backend's prompt count, chat template
+included, except on a prompt of a few words. At settlement the
+provider reports the backend's own usage and the chain charges
+
+```
+rate_in × (prompt − cached) + rate_in_cached × cached + rate_out × completion
+```
+
+per 10<sup>6</sup> units, rounded up, with `prompt ≤ units_in`, `cached ≤ prompt` and
+`completion ≤ units_out`. The unused part of the ceilings is refunded. For image and video,
+`prompt` is the declared `units_in` (reference pixel-seconds) and `cached` is 0.
+`rate_in_cached` is the window's configured cached rate, capped at the job's `rate_in`, and
+equals `rate_in` when none is configured.
 
 ## The ask book
 

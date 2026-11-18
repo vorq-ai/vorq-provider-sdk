@@ -27,8 +27,9 @@ not have.
 when the op is signed. The claimant hands the result bytes to the node, the node
 pins them and learns the name from the storage service, and that name is
 submitted alongside the signature and recorded — never attested. The signed
-members are the job, the delivered count and the issue time, which is what stops
-a relayer editing what it settles.
+members are the job, the backend's own usage (prompt, cached-prompt and
+completion counts), the cached-input rate and the issue time, which is what
+stops a relayer editing what it settles.
 
 **Every signature this module produces is canonical: ``v`` in {27, 28} and
 ``s <= N/2``, and there is a test that says so.** The registries recover with
@@ -93,7 +94,10 @@ OP_TYPES: dict[str, dict[str, list[dict[str, str]]]] = {
     "Settle": {
         "Settle": [
             {"name": "jobId", "type": "bytes32"},
+            {"name": "promptTok", "type": "uint32"},
+            {"name": "cachedTok", "type": "uint32"},
             {"name": "completionTok", "type": "uint32"},
+            {"name": "rateInCached", "type": "uint128"},
             {"name": "issuedAt", "type": "uint64"},
         ]
     },
@@ -302,9 +306,19 @@ class OpSigner:
         )
 
     def sign_settle(
-        self, job_id: str | bytes, completion_tok: int, issued_at: int, ctx: ChainContext
+        self,
+        job_id: str | bytes,
+        prompt_tok: int,
+        cached_tok: int,
+        completion_tok: int,
+        rate_in_cached: int,
+        issued_at: int,
+        ctx: ChainContext,
     ) -> str:
-        """``Settle(bytes32 jobId,uint32 completionTok,uint64 issuedAt)`` — delivery.
+        """``Settle(bytes32 jobId,uint32 promptTok,uint32 cachedTok,uint32 completionTok,
+        uint128 rateInCached,uint64 issuedAt)`` — delivery.
+
+        ``rate_in_cached`` is atomic, like every signed rate.
 
         **There is no ``result_cid`` parameter and there never will be.** The
         result's name is minted by the node after it pins the bytes this op's
@@ -314,7 +328,10 @@ class OpSigner:
             "Settle",
             {
                 "jobId": _bytes32(job_id, "job_id"),
+                "promptTok": int(prompt_tok),
+                "cachedTok": int(cached_tok),
                 "completionTok": int(completion_tok),
+                "rateInCached": int(rate_in_cached),
                 "issuedAt": int(issued_at),
             },
             ctx,

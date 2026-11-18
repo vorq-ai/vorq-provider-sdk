@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -36,10 +37,16 @@ _RESULT_KINDS = ("text", "media_urls", "media_b64")
 @dataclass(frozen=True)
 class SlaRate:
     """One window's ask: USD per 1M units of work, as the decimal strings the
-    config wrote. ``rate_in`` is ``None`` on a side the model does not meter."""
+    config wrote. ``rate_in`` is ``None`` on a side the model does not meter.
+
+    ``rate_in_cached`` prices the prompt tokens the backend reports as served
+    from its cache, signed at settle (never in the ask book). ``None`` when the
+    config names none: cached input is then charged at the job's own
+    ``rate_in`` — no discount."""
 
     rate_in: str | None
     rate_out: str
+    rate_in_cached: str | None = None
 
 
 #: The furthest under the published ask the acceptance floor may ever sit.
@@ -222,20 +229,6 @@ class ModelConfig:
 #: test that fails when they drift.
 FAIL_GRACE_SECONDS = 300
 
-#: The most bytes of sealed payload this daemon will run per declared input unit.
-#:
-#: ``units_in`` is the client's own count and the chain bills the input leg at
-#: whatever it says, so without a floor a bid can declare one unit for a megabyte
-#: and buy the work for one atomic unit — on an embedding model, where the output
-#: leg settles at zero, that is the whole bill.
-#:
-#: The shipped client SDKs declare one unit per four bytes of canonical JSON. This
-#: default is deliberately four times looser: the daemon does not reproduce their
-#: formula and must never decline an honest bid, so the gap is the margin that
-#: absorbs everything it cannot see from outside a sealed container. Lower it to
-#: tighten the floor; ``0`` turns the check off, which is the escape hatch if a
-#: client ever trips it.
-MAX_INPUT_BYTES_PER_UNIT = 16
 
 
 @dataclass(frozen=True)
@@ -263,10 +256,6 @@ class ProviderConfig:
     #: See :data:`FAIL_GRACE_SECONDS` — this is a mirror of a chain constant, so
     #: an operator who lowers it only makes their own daemon more cautious.
     fail_grace_s: float = 300
-    #: How many bytes of sealed payload one declared ``units_in`` may buy before
-    #: this daemon declines the bid. See :data:`MAX_INPUT_BYTES_PER_UNIT`; ``0``
-    #: disables the check.
-    max_input_bytes_per_unit: int = MAX_INPUT_BYTES_PER_UNIT
     #: Where the handles of jobs in flight at an async backend are kept, so a
     #: restart resumes them instead of submitting them again. The loader
     #: defaults it to a file in the working directory (a nulled key too);
@@ -373,13 +362,6 @@ def _build_provider(d, *, confidential: bool, models) -> ProviderConfig:
             "guest memory each boot, never configured; remove 'box_key'"
         )
     box_key = d.get("box_key") if confidential else _require(d, "box_key", "provider")
-    bpu = d.get("max_input_bytes_per_unit", MAX_INPUT_BYTES_PER_UNIT)
-    if isinstance(bpu, str) and bpu.strip().isdigit():
-        bpu = int(bpu)                    # `env:` resolves to a string
-    if isinstance(bpu, bool) or not isinstance(bpu, int) or bpu < 0:
-        # Zero is legal and means "off"; a negative would invert the floor into a
-        # bonus, so it is refused rather than clamped.
-        raise ConfigError("provider: 'max_input_bytes_per_unit' must be a non-negative integer")
     return ProviderConfig(
         # A `provider.id` key, if present, is silently ignored: the daemon's id is
         # admin-issued and discovered at the session handshake, never configured.
@@ -393,7 +375,6 @@ def _build_provider(d, *, confidential: bool, models) -> ProviderConfig:
         poll_interval_s=float(d.get("poll_interval_s", 5)),
         safety_margin_s=float(d.get("safety_margin_s", 60)),
         fail_grace_s=float(d.get("fail_grace_s", FAIL_GRACE_SECONDS)),
-        max_input_bytes_per_unit=bpu,
         state_db=str(d.get("state_db") or "vorqd-state.sqlite"),
         pricing=_build_pricing(d.get("pricing")),
         bid_filter=_build_bid_filter(d.get("bid_filter")),
@@ -644,9 +625,22 @@ def _build_slas(d, model: str) -> dict[str, SlaRate]:
             raise ConfigError(
                 f"model {model!r} sla {window!r}: 'rate_out' is required on every window"
             )
-        for field in ("rate_in", "rate_out"):
+        for field in ("rate_in", "rate_out", "rate_in_cached"):
             _check_usd_rate(rates.get(field), model, str(window), field)
-        out[str(window)] = SlaRate(rate_in=rates.get("rate_in"), rate_out=rates["rate_out"])
+        cached = rates.get("rate_in_cached")
+        if cached is not None:
+            if rates.get("rate_in") is None:
+                raise ConfigError(
+                    f"model {model!r} sla {window!r}: 'rate_in_cached' prices cached input, "
+                    f"and this window meters no input side (no 'rate_in')"
+                )
+            if Decimal(cached) > Decimal(rates["rate_in"]):
+                raise ConfigError(
+                    f"model {model!r} sla {window!r}: rate_in_cached={cached!r} exceeds "
+                    f"rate_in={rates['rate_in']!r}; a cached token never costs more"
+                )
+        out[str(window)] = SlaRate(rate_in=rates.get("rate_in"), rate_out=rates["rate_out"],
+                                   rate_in_cached=cached)
     return out
 
 
@@ -1146,6 +1140,19 @@ def _validate_raw_response(response, model: str) -> None:
             f"model {model!r} response.result: a 'text' result must also map "
             f"'completion_tokens' (the billed output-token count)"
         )
+    # The prompt count and its cached part are optional: a text backend that
+    # reports no prompt count settles at the order's units_in (with a warning),
+    # and one that reports no cached count settles none as cached. Media bills
+    # its declared reference units, so neither path means anything there.
+    for key in ("prompt_tokens", "cached_tokens"):
+        if key not in result:
+            continue
+        if "text" not in result:
+            raise ConfigError(
+                f"model {model!r} response.result: {key!r} applies to a 'text' result only"
+            )
+        if not isinstance(result[key], str) or not result[key].startswith("$"):
+            raise ConfigError(f"model {model!r} response.result: {key!r} must be a '$.' JSONPath")
 
     mode = response.get("mode")
     if mode not in ("sync", "poll"):

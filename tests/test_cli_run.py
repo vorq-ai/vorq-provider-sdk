@@ -79,7 +79,7 @@ class FakeStack:
             "rate_in": "0.3", "rate_out": "0.8",
             "expires_at": None, "claimed_at": "0", "ended_because": 0,
             "designated": str(designated),
-            "task_cid": self.task_cid, "units_in": "5", "units_out": "64",
+            "task_cid": self.task_cid, "units_in": "1024", "units_out": "64",
             "result_cid": None, "completion_tok": "0",
         }
         self.asks_history: list[dict] = []
@@ -112,7 +112,7 @@ class FakeStack:
             # asks the backend for nothing.
             return httpx.Response(200, text="vllm:kv_cache_usage_perc 0.25\n")
         if host == BACKEND and path == "/v1/chat/completions":
-            return httpx.Response(200, json={"choices": [{"message": {"content": "42"}}], "usage": {"completion_tokens": 3}})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "42"}}], "usage": {"prompt_tokens": 19, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 16}}})
         if path == "/auth/nonce":
             return httpx.Response(200, json={"nonce": f"n{self.session_calls}", "expires_at": 9_999_999_999, "chain_id": 84532})
         if path == "/auth/session":
@@ -351,10 +351,13 @@ async def test_daemon_requests_capacity_publishes_and_settles():
     # a body field; and the name of what was delivered is the node's to mint, so
     # nothing the daemon signed could have contained one.
     assert job_ops(stack) == ["claim", "settle"]
-    assert set(stack.settled) == {"job_id", "completion_tok", "result", "issued_at"}
+    assert set(stack.settled) == {"job_id", "prompt_tok", "cached_tok", "completion_tok",
+                                  "rate_in_cached", "result", "issued_at"}
     assert stack.simulated == [{"job_id": stack.job["job_id"],
                                 "address": stack.simulated[0]["address"]}]
     assert stack.settled["completion_tok"] == 3
+    assert (stack.settled["prompt_tok"], stack.settled["cached_tok"]) == (19, 16)
+    assert stack.settled["rate_in_cached"] == "0.3"   # none configured: the job's rate_in
     sealed = json.loads(base64.b64decode(stack.settled["result"]))
     assert sealed["enc"] == "vorq-sealed-v1"
     # ...and it opens with the key the client put inside its own sealed envelope.

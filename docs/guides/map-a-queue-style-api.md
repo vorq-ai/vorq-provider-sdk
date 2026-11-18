@@ -45,7 +45,9 @@ models:
   write the URL out and pull secrets from the environment.
 - `$.…` values are JSONPath expressions evaluated against the backend's answers.
 - `result` names exactly one output: `media_urls` (the daemon downloads each URL),
-  `media_b64` (the daemon decodes each value), or `text` together with `completion_tokens`.
+  `media_b64` (the daemon decodes each value), or `text` together with `completion_tokens`
+  (and, optionally, `prompt_tokens` and `cached_tokens`; see
+  [Raw mappings: result](../reference/raw-mappings.md#result)).
 
 ## Forward the metered fields
 

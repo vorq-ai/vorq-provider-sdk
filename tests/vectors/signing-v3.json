@@ -448,8 +448,20 @@
               "type": "bytes32"
             },
             {
+              "name": "promptTok",
+              "type": "uint32"
+            },
+            {
+              "name": "cachedTok",
+              "type": "uint32"
+            },
+            {
               "name": "completionTok",
               "type": "uint32"
+            },
+            {
+              "name": "rateInCached",
+              "type": "uint128"
             },
             {
               "name": "issuedAt",
@@ -466,13 +478,16 @@
         },
         "message": {
           "jobId": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
+          "promptTok": 900,
+          "cachedTok": 300,
           "completionTok": 1500,
+          "rateInCached": "3000",
           "issuedAt": 1800000000
         }
       },
-      "digest": "0x203ed641f5fd465863326b64687e4bdf8159bd8b63985e9a185424d8859677b0",
+      "digest": "0xd96b5e510c821cfa8a7d18f9ae27a87c5f4577cb57b92d88a09f20106465535e",
       "signer": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
-      "signature": "0xb9ca439e6f70458683eac55f448cacec7af5089a061ae5533d1594c12fbe2bec62cb2d7ee7896952f43823dfc533b1680fdb5ad798cffb0ef7d1753b3a53186d1b"
+      "signature": "0xb281010c919b0f3c9a505bbb843f9984e0670142b131abe22e688ca0d838fd71708914a42f7c1dfd7ab2b5f603d5f4befcff9dba7d4cdff742b2a82cbada2de51c"
     },
     {
       "name": "fail",

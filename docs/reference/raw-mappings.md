@@ -87,6 +87,8 @@ Exactly one of `text`, `media_urls` or `media_b64`.
 |---|---|
 | `text` | JSONPath to the output text. Requires `completion_tokens`. |
 | `completion_tokens` | JSONPath to the output token count that is settled. |
+| `prompt_tokens` | Text only, optional. JSONPath to the backend's prompt token count that is settled. Unmapped or missing, the job settles at the order's `units_in` and a warning is logged. |
+| `cached_tokens` | Text only, optional. JSONPath to the part of the prompt count served from the backend's cache, settled at `rate_in_cached`. Unmapped or missing: 0. |
 | `media_urls` | JSONPath to output URLs (absolute `http(s)`); the daemon downloads each. |
 | `media_b64` | JSONPath to base64 outputs; the daemon decodes each. |
 | `content_type` | Media only. Scalar JSONPath to the output media type. |

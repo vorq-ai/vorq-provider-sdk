@@ -1100,11 +1100,10 @@ def test_plan_units_param_caps_leave_lower_values_alone():
     assert "fps" not in out                   # a cap never injects a param
 
 
-# -- input_shortfall: units_in is declared, billed, and until now unchecked -----
+# -- input_shortfall: units_in is the ceiling the prompt count settles under ----
 #
-# The chain bills `rateIn·unitsIn` whatever the client wrote, and there is no
-# delivered-input quantity to clamp it against — so a provider's only move is to
-# decline. This is the predicate that decides when to.
+# Input cannot be delivered short, so a provider's only move against an order
+# whose ceiling sits below the payload it carries is to decline it.
 
 
 def _text_job(units_in, *, rate_in=200_000, modality="text"):
@@ -1113,53 +1112,28 @@ def _text_job(units_in, *, rate_in=200_000, modality="text"):
                   units_in=units_in, units_out=128)
 
 
-def test_a_declaration_that_covers_the_payload_is_not_short():
-    assert input_shortfall(_text_job(10_000), 40_000, bytes_per_unit=16, modality="text") == 0
-
-
-def test_the_shortfall_is_the_bytes_past_what_was_paid_for():
-    """Pinned as arithmetic, not as `> 0`: the number reaches an operator's log."""
-    assert input_shortfall(_text_job(1), 1_000_000, bytes_per_unit=16, modality="text") == (
-        1_000_000 - ENVELOPE_SLACK_BYTES - 16
-    )
+def test_the_boundary_is_the_payload_less_the_envelope_slack():
+    """Pinned as arithmetic: accept exactly at the boundary, refuse one under it."""
+    payload = 40_000
+    boundary = payload - ENVELOPE_SLACK_BYTES
+    assert input_shortfall(_text_job(boundary), payload, modality="text") == 0
+    assert input_shortfall(_text_job(boundary - 1), payload, modality="text") == 1
+    assert input_shortfall(_text_job(1), payload, modality="embedding") == boundary - 1
 
 
 def test_a_payload_inside_the_envelope_slack_is_never_short():
-    """What the slack is for: the envelope frame and a `custom_id` of unknown width
-    are both invisible from outside, so every measurement is forgiven that much.
-    """
-    assert input_shortfall(_text_job(0), ENVELOPE_SLACK_BYTES, bytes_per_unit=16, modality="text") == 0
+    """The slack is the envelope's own bytes: a payload no larger owes nothing."""
+    assert input_shortfall(_text_job(0), ENVELOPE_SLACK_BYTES, modality="text") == 0
+    assert input_shortfall(_text_job(0), ENVELOPE_SLACK_BYTES + 1, modality="text") == 1
 
 
 @pytest.mark.parametrize("modality", ["image", "video"])
 def test_a_pixel_metered_modality_is_never_judged_on_its_payload_bytes(modality):
-    """`units_in` is not denominated in bytes on every modality, so the floor must
-    not be applied on every modality.
-
-    For text and embeddings the clients declare one unit per four bytes of input,
-    which is what makes a byte measurement a floor at all. For image and video the
-    unit is a pixel-second of *reference* — a number with no relation to how large
-    the payload is, since a sharper reference of identical dimensions costs more
-    bytes and buys nothing. Judging those by weight would decline honest media work
-    for carrying its own input, so they are checked by re-deriving the reference
-    instead, after decryption, where the real dimensions are knowable.
-
-    Today no shipped media model quotes an input rate at all, so `rate_in` alone
-    happens to exempt them. That is a coincidence about the catalog and not a
-    property of the design — the moment a media model prices its input side, this
-    is the gate that has to hold.
-    """
+    """For image and video ``units_in`` is a pixel-second of *reference* — a number
+    with no relation to how large the payload is. Those are checked by re-deriving
+    the reference after decryption instead."""
     job = _text_job(0, modality=modality)
-    assert input_shortfall(job, 1_000_000, bytes_per_unit=16, modality=modality) == 0
-
-
-def test_a_bid_whose_window_meters_no_input_is_never_short():
-    """Media quotes an output rate and no input one. With `rate_in` unset the input
-    leg bills nothing whatever `units_in` says, so there is nothing to be short of —
-    and judging it would refuse honest media work for a number nobody is charged for.
-    """
-    assert input_shortfall(_text_job(None, rate_in=None), 1_000_000, bytes_per_unit=16, modality="text") == 0
-    assert input_shortfall(_text_job(1, rate_in=0), 1_000_000, bytes_per_unit=16, modality="text") == 0
+    assert input_shortfall(job, 1_000_000, modality=modality) == 0
 
 
 def test_a_row_that_carries_no_units_in_is_not_judged():
@@ -1167,20 +1141,107 @@ def test_a_row_that_carries_no_units_in_is_not_judged():
     drop, so its absence means something changed upstream — and the worst answer to
     that is a daemon that silently stops claiming everything.
     """
-    assert input_shortfall(_text_job(None), 1_000_000, bytes_per_unit=16, modality="text") == 0
+    assert input_shortfall(_text_job(None), 1_000_000, modality="text") == 0
 
 
-def test_a_zero_bytes_per_unit_turns_the_check_off():
-    assert input_shortfall(_text_job(1), 10 * 1024 * 1024, bytes_per_unit=0, modality="text") == 0
+# -- usage: the backend's own prompt, cached and completion counts ---------------
 
 
-def test_a_tighter_allowance_finds_what_a_looser_one_forgives():
-    """The knob's direction, pinned: lower means stricter."""
-    # 40 KB less the slack is 35_904 bytes to cover: 3_000 units buy 48_000 of
-    # them at 16 and only 12_000 at 4.
-    job, payload = _text_job(3_000), 40_000
-    assert input_shortfall(job, payload, bytes_per_unit=4, modality="text") > 0
-    assert input_shortfall(job, payload, bytes_per_unit=16, modality="text") == 0
+def _sync_driver(preset, answer, **params):
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=answer)
+    be = BackendConfig(preset=preset, params={"base_url": "http://runtime/v1", "model": "rt", **params})
+    return BackendDriver.from_config(httpx.AsyncClient(transport=httpx.MockTransport(handler)), be,
+                                     sleep=no_sleep)
+
+
+async def test_openai_chat_reads_prompt_and_cached_counts():
+    driver = _sync_driver("openai-chat", {
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 2832, "completion_tokens": 5,
+                  "prompt_tokens_details": {"cached_tokens": 2816}},
+    })
+    result = await driver.run(text_job(), {"messages": [{"role": "user", "content": "x"}]})
+    assert (result.prompt_tokens, result.cached_tokens, result.completion_tokens) == (2832, 2816, 5)
+
+
+async def test_openai_chat_without_cached_details_reports_no_cached_count():
+    driver = _sync_driver("openai-chat", {"choices": [{"message": {"content": "ok"}}],
+                                          "usage": {"prompt_tokens": 40, "completion_tokens": 5}})
+    result = await driver.run(text_job(), {"messages": [{"role": "user", "content": "x"}]})
+    assert (result.prompt_tokens, result.cached_tokens) == (40, None)
+
+
+async def test_openai_chat_without_any_prompt_count_reports_none():
+    driver = _sync_driver("openai-chat", {"choices": [{"message": {"content": "ok"}}],
+                                          "usage": {"completion_tokens": 5}})
+    result = await driver.run(text_job(), {"messages": [{"role": "user", "content": "x"}]})
+    assert result.prompt_tokens is None and result.cached_tokens is None
+
+
+async def test_openai_embeddings_reads_the_prompt_count_and_cached_details():
+    driver = _sync_driver("openai-embeddings", {
+        "object": "list", "data": [], "model": "rt",
+        "usage": {"prompt_tokens": 6, "total_tokens": 6, "prompt_tokens_details": {"cached_tokens": 2}},
+    })
+    result = await driver.run(embedding_job(), {"input": "v"})
+    assert (result.kind, result.prompt_tokens, result.cached_tokens, result.completion_tokens) == (
+        "embedding", 6, 2, None)
+
+
+def test_responses_usage_is_renamed_with_its_cached_part():
+    chat = responses_to_chat({"output": [], "usage": {
+        "input_tokens": 90, "output_tokens": 3, "total_tokens": 93,
+        "input_tokens_details": {"cached_tokens": 64}}})
+    assert chat["usage"]["prompt_tokens"] == 90
+    assert chat["usage"]["prompt_tokens_details"] == {"cached_tokens": 64}
+
+
+def test_responses_usage_without_cached_details_carries_none():
+    chat = responses_to_chat({"output": [], "usage": {"input_tokens": 9, "output_tokens": 3}})
+    assert "prompt_tokens_details" not in chat["usage"]
+
+
+async def test_openai_responses_reads_input_and_cached_counts():
+    done = {**RESPONSE_DONE, "usage": {"input_tokens": 7, "output_tokens": 12, "total_tokens": 19,
+                                       "input_tokens_details": {"cached_tokens": 4}}}
+    driver = _responses_driver(responses_backend(statuses=[done], log=[], captured={}))
+    result = await driver.run(text_job(), {"messages": [{"role": "user", "content": "hi"}]})
+    assert (result.prompt_tokens, result.cached_tokens, result.completion_tokens) == (7, 4, 12)
+
+
+async def test_openai_batch_reads_the_lines_prompt_and_cached_counts():
+    body = {**CHAT_BODY_DONE, "usage": {"prompt_tokens": 9, "completion_tokens": 2,
+                                        "prompt_tokens_details": {"cached_tokens": 3}}}
+    line = {"custom_id": BATCH_CUSTOM_ID, "response": {"status_code": 200, "body": body}}
+    driver = _batch_driver(batch_backend(statuses=["completed"], output_lines=[line],
+                                         log=[], captured={}))
+    result = await driver.run(batch_job(), {"input": "hi"})
+    assert (result.prompt_tokens, result.cached_tokens, result.completion_tokens) == (9, 3, 2)
+
+
+async def test_a_raw_mapping_reads_the_usage_paths_it_names():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"out": "hi", "u": {"in": 21, "hit": 8, "out": 4}})
+    be = BackendConfig(preset=None, request={"method": "POST", "url": "http://raw/run", "body": {}},
+                       response={"mode": "sync", "result": {
+                           "text": "$.out", "completion_tokens": "$.u.out",
+                           "prompt_tokens": "$.u.in", "cached_tokens": "$.u.hit"}})
+    driver = BackendDriver.from_config(httpx.AsyncClient(transport=httpx.MockTransport(handler)), be,
+                                       sleep=no_sleep)
+    result = await driver.run(text_job(), {"prompt": "x"})
+    assert (result.prompt_tokens, result.cached_tokens, result.completion_tokens) == (21, 8, 4)
+
+
+async def test_a_raw_mapping_naming_no_usage_paths_reports_none():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"out": "hi", "n": 4})
+    be = BackendConfig(preset=None, request={"method": "POST", "url": "http://raw/run", "body": {}},
+                       response={"mode": "sync", "result": {"text": "$.out", "completion_tokens": "$.n"}})
+    driver = BackendDriver.from_config(httpx.AsyncClient(transport=httpx.MockTransport(handler)), be,
+                                       sleep=no_sleep)
+    result = await driver.run(text_job(), {"prompt": "x"})
+    assert (result.prompt_tokens, result.cached_tokens) == (None, None)
 
 
 # --- openai-chat preset: streaming -------------------------------------------
@@ -1379,7 +1440,9 @@ def test_expand_openai_responses_shape():
     assert set(poll["failed_values"]) == {"failed", "cancelled", "incomplete"}
     assert poll["max_polls"] == 10
     assert mapping.response["result"] == {"text": "$.choices[0].message.content",
-                                          "completion_tokens": "$.usage.completion_tokens"}
+                                          "completion_tokens": "$.usage.completion_tokens",
+                                          "prompt_tokens": "$.usage.prompt_tokens",
+                                          "cached_tokens": "$.usage.prompt_tokens_details.cached_tokens"}
 
 
 async def test_openai_responses_submits_in_the_background_then_polls_by_id():

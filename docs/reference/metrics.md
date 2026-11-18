@@ -47,7 +47,7 @@ sends a signed `fail`, which refunds the client immediately.
 | `undecryptable` | The payload did not decrypt. |
 | `malformed_envelope` | Wrong envelope version, no input, or a missing or invalid result key. |
 | `owner_mismatch` | The envelope names a different owner than the job. |
-| `units_in_short` | The payload is larger than the declared input units allow (jobs recovered after a restart). |
+| `units_in_short` | The declared input units do not cover the payload (jobs recovered after a restart). |
 | `unseal_failed` | The daemon's box key could not open the payload key. |
 | `not_our_bid`, `no_cipher` | The job is designated to another provider, or no box key is loaded. |
 | `escrow_unavailable`, `escrow_unreachable` | No escrow client, or the escrow did not answer. |

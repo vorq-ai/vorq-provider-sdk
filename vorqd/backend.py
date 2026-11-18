@@ -3,7 +3,8 @@
 Driven entirely by the YAML mapping. A preset (``openai-chat``,
 ``openai-embeddings``, ``openai-responses`` and ``openai-batch`` ship) expands to
 the same request/response shape a raw mapping declares, so one execution path
-serves both. Text jobs yield a text string plus ``completion_tokens``; media
+serves both. Text jobs yield a text string plus the backend's ``prompt_tokens``,
+``cached_tokens`` and ``completion_tokens``; media
 jobs yield the output URLs or decoded base64 blobs the scheduler seals into the
 result, along with the dimensions the job was priced against.
 """
@@ -586,81 +587,65 @@ def _within_bounds(key: str, limits: dict, width: int, height: int, seconds: int
                 + f"; this backend takes {bound} {limits[bound]}")
 
 
-#: Everything in a sealed envelope that is not the model input, generously.
+#: The most bytes of a sealed envelope that are not the model input, rounded up.
 #:
-#: The client seals ``{v, owner, result_key, input}`` plus an optional
-#: ``custom_id`` as canonical JSON. The fixed frame is 161 bytes — two braces,
-#: four keys, an address, a result key and a version string — and ``custom_id`` is
-#: an opaque caller label with no ceiling anywhere in the protocol. This is the
-#: frame plus a generous allowance for that label, and it is subtracted from every
-#: measurement, so the daemon's estimate of the input's own size can only come out
-#: **low**. A floor that under-estimates never refuses an honest client, which is
-#: the only failure mode that costs a provider work it wanted.
-ENVELOPE_SLACK_BYTES = 4096
-
-#: The modalities whose ``units_in`` is denominated in bytes of input.
+#: The clients seal canonical JSON (sorted keys, no whitespace) of
+#: ``{custom_id?, input, owner, result_key, v}``. Around the input's own bytes:
 #:
-#: Text and embeddings are metered on the prompt, and the shipped clients declare
-#: one unit per four bytes of it — which is the whole reason a byte measurement
-#: can stand in as a floor. Image and video meter the *reference* in pixels, a
-#: quantity with no relation to payload size: a sharper reference of identical
-#: dimensions costs more bytes and buys exactly the same work. Weighing those
-#: would decline honest media for carrying its own input, so they are held to
-#: their declaration by re-deriving the reference after decryption instead, where
-#: its real dimensions are knowable.
-BYTE_METERED_MODALITIES = frozenset({"text", "embedding"})
+#: - the fixed frame, 161 bytes: ``{"input":`` (9 with the brace),
+#:   ``,"owner":`` plus a quoted 42-character address (9 + 44),
+#:   ``,"result_key":`` plus quoted 64 hex digits (14 + 66), ``,"v":"vorq-env-v1"``
+#:   (18) and the closing brace (1);
+#: - the optional ``custom_id``, at most 64 characters, at its worst JSON size of
+#:   six bytes a character (a control character escapes as ``\u00XX``):
+#:   ``"custom_id":`` (12), two quotes, 384 bytes and a comma — 399.
+#:
+#: 560 in all; 640 is the next multiple of 128. Subtracted from every
+#: measurement, it makes the estimate of the input's own size come out low by at
+#: most that, so an honest client always passes and a long prompt is covered to
+#: within 640 bytes.
+ENVELOPE_SLACK_BYTES = 640
+
+#: The modalities whose ``units_in`` is a ceiling on the backend's prompt count.
+#:
+#: Image and video meter the *reference* in pixel-seconds, a quantity with no
+#: relation to payload size; they are held to their declaration by re-deriving
+#: the reference after decryption instead (:func:`check_references`).
+TOKEN_MODALITIES = frozenset({"text", "embedding"})
 
 
-def input_shortfall(job, payload_bytes: int, *, bytes_per_unit: int, modality: str | None) -> int:
-    """Bytes of sealed payload past what this order's ``units_in`` pays for; 0 when covered.
+def input_shortfall(job, payload_bytes: int, *, modality: str | None) -> int:
+    """Input units this order is short of its payload; 0 when ``units_in`` covers it.
 
-    ``units_in`` is declared by the client and the chain bills the input leg at
-    whatever it says — ``charge = min(cap, ceilDiv(rateIn·unitsIn + rateOut·tok,
-    RATE_SCALE))`` — with no floor under it anywhere. On an ``embedding`` model,
-    where settlement reports ``completion_tok = 0``, ``rateIn·unitsIn`` is the
-    **entire** bill: one declared unit buys a megabyte of prompt for one atomic
-    unit of value. And unlike ``units_out``, there is nothing to clamp — a
-    provider cannot deliver less input than it was sent, so the only move against
-    an under-declared bid is to decline it.
+    A text or embedding order's ``units_in`` is the input's canonical JSON byte
+    length — the ceiling settle bills the backend's prompt count under. Text runs
+    about four bytes a token, so the ceiling sits above the prompt count, chat
+    template included, for anything longer than a few words. An order declaring
+    fewer units than its payload caps the provider's input bill below the work it
+    carries, and input cannot be delivered short, so declining is the only remedy.
 
-    **This deliberately does not reproduce what the clients compute.** They declare
-    one unit per four bytes of canonical JSON; this daemon owns no canonical-JSON
-    writer and must not grow one, because a third copy of that formula is a third
-    thing to drift out of step. What it owns instead is a measurement it can take
-    without a key — sealed bytes, from a container's own length before the claim
-    and from the plaintext after it — and an operator's ceiling on how many of
-    them one paid unit may buy. At the shipped default that ceiling is four times
-    looser than the clients' own rate, and the slack is subtracted on top; a
-    multiplicative tolerance that wide is what makes every additive unknown
-    harmless, so the floor catches the absurd and never argues about the marginal.
+    ``payload_bytes`` is the envelope's plaintext length — from a container's own
+    length before the claim, from the plaintext after it — and
+    :data:`ENVELOPE_SLACK_BYTES` comes off it, so the estimate of the input never
+    exceeds the input. An honest order therefore always passes.
 
-    Zero on a bid whose window meters no input side: ``rate_in`` is unset there,
-    the input leg bills nothing whatever ``units_in`` says, and judging it would
-    decline honest media work over a number nobody is charged for. Zero too on a
-    row carrying no ``units_in`` at all — a signed order term the coordinator has
-    no reason to drop, so its absence means something changed upstream, and the
-    worst possible answer to that is a daemon that quietly stops claiming.
+    Zero on a modality outside :data:`TOKEN_MODALITIES`, and on a row carrying no
+    ``units_in`` at all — a signed order term the coordinator has no reason to
+    drop, so its absence means something changed upstream, and the worst answer
+    to that is a daemon that quietly stops claiming.
 
-    Zero as well on any modality whose input is not counted in bytes — see
-    :data:`BYTE_METERED_MODALITIES`. Media declares reference pixel-seconds, which
-    a payload's weight says nothing about.
-
-    ``modality`` is a **parameter and not read off the job**, which is the one
-    surprising thing here. ``EvmJob.modality`` is a placeholder until ``_ingest``
-    stamps it after the claim, so a media job reads as ``"text"`` for the whole of
-    the pre-claim sweep — exactly where this is most useful and where getting it
-    wrong declines honest work. The caller knows: before the claim it is the model
-    the sweep is polling for, after it the job's own stamped value.
+    ``modality`` is a **parameter and not read off the job**: ``EvmJob.modality``
+    is a placeholder until ``_ingest`` stamps it after the claim, so a media job
+    reads as ``"text"`` for the whole of the pre-claim sweep. The caller knows:
+    before the claim it is the model being polled for, after it the job's own
+    stamped value.
     """
-    if modality not in BYTE_METERED_MODALITIES:
-        return 0
-    if not job.rate_in:
+    if modality not in TOKEN_MODALITIES:
         return 0
     declared = getattr(job, "units_in", None)
-    if declared is None or bytes_per_unit <= 0:
+    if declared is None:
         return 0
-    paid_for = int(declared) * int(bytes_per_unit)
-    return max(0, int(payload_bytes) - ENVELOPE_SLACK_BYTES - paid_for)
+    return max(0, int(payload_bytes) - ENVELOPE_SLACK_BYTES - int(declared))
 
 
 def _readable_list(value) -> list:
@@ -686,8 +671,9 @@ def responses_to_chat(final: dict) -> dict:
     streamed chat completion carries it, and ``function_call`` items come back
     as chat ``tool_calls`` (with object arguments serialised, since the chat
     shape carries them as a string). The usage block is renamed field for
-    field; without an output count there is no usage block, and extraction then
-    reports no billable quantity.
+    field (``input_tokens_details.cached_tokens`` becomes
+    ``prompt_tokens_details.cached_tokens``); without an output count there is no
+    usage block, and extraction then reports no billable quantity.
     """
     texts: list[str] = []
     reasoning: list[str] = []
@@ -741,6 +727,9 @@ def responses_to_chat(final: dict) -> dict:
             "completion_tokens": usage["output_tokens"],
             "total_tokens": usage.get("total_tokens"),
         }
+        prompt_details = usage.get("input_tokens_details")
+        if isinstance(prompt_details, dict) and "cached_tokens" in prompt_details:
+            out["usage"]["prompt_tokens_details"] = {"cached_tokens": prompt_details["cached_tokens"]}
         details = usage.get("output_tokens_details")
         if isinstance(details, dict):
             thinking = details.get("reasoning_tokens")
@@ -754,6 +743,10 @@ class Normalized:
     kind: str  # "text" | "media" | "embedding"
     text: str | None = None
     completion_tokens: int | None = None
+    # The backend's own prompt count and the cached part of it (text and
+    # embedding). Settle bills them; ``None`` is "the backend did not say".
+    prompt_tokens: int | None = None
+    cached_tokens: int | None = None
     media_urls: list[str] | None = None
     media_blobs: list[bytes] | None = None
     raw: dict | None = None  # the final backend response (text: the OpenAI response object)
@@ -777,6 +770,15 @@ class Mapping:
     preset: str | None
 
 
+#: Where every preset reads the prompt count and its cached part. Each preset's
+#: final object is in the chat-completion shape by extraction time
+#: (``responses_to_chat`` renames the Responses usage block), so one pair serves.
+USAGE_PATHS = {
+    "prompt_tokens": "$.usage.prompt_tokens",
+    "cached_tokens": "$.usage.prompt_tokens_details.cached_tokens",
+}
+
+
 def expand_preset(be: BackendConfig) -> Mapping:
     if be.preset not in ("openai-chat", "openai-embeddings", "openai-responses", "openai-batch"):
         raise BackendError(f"unknown preset: {be.preset!r}")
@@ -789,10 +791,10 @@ def expand_preset(be: BackendConfig) -> Mapping:
         return Mapping(
             request={"method": "POST", "url": f"{base}/embeddings", "headers": headers},
             # No `completion_tokens` path, and its absence is the contract: an embeddings
-            # response carries `usage.prompt_tokens` and nothing else, so there is no output
-            # count to bill. `_extract` therefore hands back `completion_tokens=None`, the
-            # scheduler settles at 0, and the charge is the input leg alone.
-            response={"mode": "sync", "result": {"embeddings": "$.data"}},
+            # response carries `usage.prompt_tokens` and no output count to bill.
+            # `_extract` hands back `completion_tokens=None`, the scheduler settles the
+            # output leg at 0, and the charge is the prompt count alone.
+            response={"mode": "sync", "result": {"embeddings": "$.data", **USAGE_PATHS}},
             health=be.health,
             params=p,
             preset="openai-embeddings",
@@ -818,6 +820,7 @@ def expand_preset(be: BackendConfig) -> Mapping:
                 "result": {
                     "text": "$.choices[0].message.content",
                     "completion_tokens": "$.usage.completion_tokens",
+                    **USAGE_PATHS,
                 },
             },
             health=be.health,
@@ -845,6 +848,7 @@ def expand_preset(be: BackendConfig) -> Mapping:
                 "result": {
                     "text": "$.choices[0].message.content",
                     "completion_tokens": "$.usage.completion_tokens",
+                    **USAGE_PATHS,
                 },
             },
             health=be.health,
@@ -859,6 +863,7 @@ def expand_preset(be: BackendConfig) -> Mapping:
             "result": {
                 "text": "$.choices[0].message.content",
                 "completion_tokens": "$.usage.completion_tokens",
+                **USAGE_PATHS,
             },
         },
         health=be.health,
@@ -1645,14 +1650,17 @@ class BackendDriver:
 
     def _extract(self, result: dict, final: dict, input: dict | None = None,
                  modality: str | None = None) -> Normalized:
+        usage = {k: extract(result[k], final) if k in result else None
+                 for k in ("prompt_tokens", "cached_tokens")}
         if "embeddings" in result:
             # `completion_tokens` stays None deliberately — see `expand_preset`. The whole
             # response is the result: the client is handed the OpenAI `EmbeddingResponse`
             # verbatim, `usage.prompt_tokens` included, sealed like any other.
-            return Normalized(kind="embedding", completion_tokens=None, raw=final)
+            return Normalized(kind="embedding", completion_tokens=None, raw=final, **usage)
         if "text" in result:
             ct = extract(result["completion_tokens"], final) if "completion_tokens" in result else None
-            return Normalized(kind="text", text=extract(result["text"], final), completion_tokens=ct, raw=final)
+            return Normalized(kind="text", text=extract(result["text"], final), completion_tokens=ct,
+                              raw=final, **usage)
         media = self._media_facts(result, final, input or {}, modality)
         if "media_urls" in result:
             return Normalized(kind="media", media_urls=_media_urls(extract(result["media_urls"], final)),

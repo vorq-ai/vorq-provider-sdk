@@ -100,7 +100,7 @@ def test_the_session_type_table_matches_the_vector() -> None:
 
 
 def test_no_op_type_carries_a_cid() -> None:
-    """``Settle`` attests the delivered count and nothing about which bytes produced it."""
+    """``Settle`` attests the usage and nothing about which bytes produced it."""
     for members in opsig.OP_TYPES.values():
         for struct in members.values():
             assert not any("cid" in member["name"].lower() for member in struct)
@@ -174,7 +174,8 @@ def signed_for(name: str, signer: OpSigner) -> str:
     if primary == "Claim":
         return signer.sign_claim(msg["jobId"], msg["issuedAt"], ctx)
     if primary == "Settle":
-        return signer.sign_settle(msg["jobId"], msg["completionTok"], msg["issuedAt"], ctx)
+        return signer.sign_settle(msg["jobId"], msg["promptTok"], msg["cachedTok"],
+                                  msg["completionTok"], int(msg["rateInCached"]), msg["issuedAt"], ctx)
     if primary == "Fail":
         return signer.sign_fail(msg["jobId"], msg["issuedAt"], ctx)
     if primary == "SetIdentity":
@@ -330,7 +331,8 @@ def test_the_domain_is_never_a_parameter() -> None:
 def test_settle_takes_no_result_cid() -> None:
     """The daemon does not know the name and does not sign one."""
     params = inspect.signature(OpSigner.sign_settle).parameters
-    assert list(params) == ["self", "job_id", "completion_tok", "issued_at", "ctx"]
+    assert list(params) == ["self", "job_id", "prompt_tok", "cached_tok", "completion_tok",
+                            "rate_in_cached", "issued_at", "ctx"]
     assert not any("cid" in p.lower() for p in params)
 
 

@@ -24,7 +24,10 @@ models:
 
 The daemon sends `POST {base_url}/chat/completions` with the job's messages, your `model`,
 and `max_tokens` set to the job's output cap. The whole response object, usage block included,
-is sealed and returned to the client. The settled output count is `usage.completion_tokens`.
+is sealed and returned to the client. The settle reads `usage.prompt_tokens`,
+`usage.prompt_tokens_details.cached_tokens` and `usage.completion_tokens`. To charge less for
+cached prompt tokens, set `rate_in_cached` on the window (see
+[Configuration: slas](../reference/configuration.md#slas)).
 
 ## Gate the asks on a health check
 
@@ -113,7 +116,8 @@ only.
 
 The daemon sends `POST {base_url}/embeddings` with the job's `input`, `encoding_format`
 (default `base64`) and `dimensions` if the job names one. The response is returned verbatim.
-Embeddings settle with no output count, so the job is paid on `rate_in` alone.
+Embeddings settle with no output count, so the job is paid on `rate_in` alone, for the
+backend's `usage.prompt_tokens`.
 
 For an asymmetric retrieval model, `input_type` pins the side (`query` or `passage`) this
 listing embeds into. Set `input_type_overridable: true` to let a caller choose the side

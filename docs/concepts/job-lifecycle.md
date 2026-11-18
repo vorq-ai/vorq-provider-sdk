@@ -24,9 +24,10 @@ Each returned job is then checked, cheapest check first. Nothing is claimed unti
   and checked against the job's own commitment (see [Encryption](./encryption.md)). Bytes that
   do not match are never claimed, whichever gateway served them. A job whose bytes cannot be
   found is skipped and retried later with a growing delay.
-- **Declared input size.** For text and embedding models, the payload must not be far larger
-  than the input units the client paid for (`max_input_bytes_per_unit`, default 16 bytes per
-  unit). Oversized bids are skipped.
+- **Declared input size.** For text and embedding models, `units_in` must cover the payload's
+  size less 640 bytes of envelope slack (the sealed envelope's own fields, at most 560 bytes).
+  The clients declare exactly the request's byte length, so an honest order always passes; an
+  order declaring less is skipped.
 
 Declining here is free: nothing is spent, and the job stays on the book for other providers.
 
@@ -52,14 +53,20 @@ the output the client paid for. Each attempt is bounded by the time left before
 ## Settle
 
 The result is sealed to the client's key and settled with a signed `settle` carrying the
-backend's output count (tokens for text, delivered pixels for media, capped at the order's
-limit). A sealed result up to 15,679,488 bytes travels inline with the settle; a larger one is
+backend's own usage: `prompt_tok`, `cached_tok`, `completion_tok`, and `rate_in_cached` (USD).
+For text and embedding, `prompt_tok` and `cached_tok` are the backend's prompt and cached-prompt
+counts (`cached_tok` 0 when it reports none) and `completion_tok` its output count (0 for
+embeddings). A backend reporting no prompt count settles at `units_in`, with a warning naming
+the model; a prompt count above `units_in` is logged at error and settled at `units_in`. For
+media, `prompt_tok` is the declared `units_in`, `cached_tok` is 0 and `completion_tok` the
+delivered pixels. Every count is capped at the order's ceiling. A sealed result up to 15,679,488 bytes travels inline with the settle; a larger one is
 uploaded to the coordinator first. The coordinator stores the bytes, names them by content id
 and records that id on-chain.
 
-The chain computes the charge from the rates the client signed. For text, the settled count is
-the one number the provider supplies, and the correct value is defined as the retokenization
-of the delivered output, so an inflated count is disputable.
+The chain computes the charge from the rates the client signed and the signed usage (see
+[Pricing and asks](./pricing-and-asks.md)). For text, the counts are the numbers the provider
+supplies, and the correct values are defined as the backend's tokenization of the delivered
+input and output, so an inflated count is disputable.
 
 ## The SLA guard
 

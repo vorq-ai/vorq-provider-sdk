@@ -38,7 +38,6 @@ models:
 | `poll_interval_s` | `5` | Seconds between poll sweeps. |
 | `safety_margin_s` | `60` | Seconds before the SLA deadline after which no attempt runs and no settle is tried. |
 | `fail_grace_s` | `300` | Window after a claim in which a `fail` is penalty-free, mirroring the job registry. Used for logging only. |
-| `max_input_bytes_per_unit` | `16` | For `text` and `embedding` bids with a nonzero `rate_in`: most payload bytes one declared input unit may buy (plus 4096 bytes of slack). Larger bids are not claimed. `0` disables the check. |
 | `state_db` | `vorqd-state.sqlite` | SQLite file for the handles of jobs in flight at resumable backends. Relative paths resolve against the working directory. Must be writable. |
 | `escrow_url` | `api_url` | Base URL of the escrow that releases payload keys for open bids. |
 | `pricing` | off | Private acceptance floor. See [pricing](#pricing). |
@@ -64,7 +63,7 @@ Each item of `models`:
 | Key | Default | Meaning |
 |---|---|---|
 | `model` | required | Network model name clients submit against. Must be in the coordinator's catalog. |
-| `slas` | required | Map of SLA window to `{rate_in?, rate_out}`. See [slas](#slas). |
+| `slas` | required | Map of SLA window to `{rate_in?, rate_in_cached?, rate_out}`. See [slas](#slas). |
 | `backend` | required | How to run a job: exactly one of `preset` ([presets](./presets.md)) or `request` ([raw mappings](./raw-mappings.md)), plus the [shared backend keys](#backend-keys). |
 | `modality` | none | `text`, `embedding`, `image` or `video`. Used when the catalog names none. The daemon claims nothing for a model whose modality is unknown. |
 | `confidential` | `false` | `true` makes the daemon a confidential provider. See [Run a confidential provider](../guides/run-a-confidential-provider.md). |
@@ -75,7 +74,11 @@ Each item of `models`:
 
 - Keys are windows: a whole number and a unit `s`, `m`, `h` or `d` (`"1h"`, `"24h"`).
 - `rate_out` is required on every window; `rate_in` is optional.
-- Rates are USD per 10<sup>6</sup> units of work, as quoted decimal strings (`"0.16"`): digits,
+- `rate_in_cached` is optional: the rate for prompt tokens the backend reports as served from
+  its cache. It needs `rate_in` on the same window and must not exceed it. Absent, cached
+  tokens are charged at the job's `rate_in` (no discount). It is not published in the ask
+  book; it is signed into each `settle`, capped at the job's own `rate_in`.
+- Rates (all three) are USD per 10<sup>6</sup> units of work, as quoted decimal strings (`"0.16"`): digits,
   optionally one point and fraction digits, no sign or exponent. An unquoted YAML number is
   refused. A rate with more fraction digits than the payment token's decimals is refused when
   the daemon reads the chain, never rounded.
@@ -147,7 +150,8 @@ message naming the key and model on the first violation. Beyond the types and ra
 
 - `models` is a non-empty list; each `backend` holds exactly one of `preset` or `request`.
 - A raw `response.result` holds exactly one of `text`, `media_urls` or `media_b64`, and a
-  `text` result also maps `completion_tokens`.
+  `text` result also maps `completion_tokens`. `prompt_tokens` and `cached_tokens` are
+  optional `$.` JSONPaths, allowed on a `text` result only.
 - A raw poll holds exactly one of `status_url` or `request`; `handle` requires `request`, and
   a poll request with `handle` cannot use `{submit.…}`. A poll request using `{handle}` needs
   `handle`.
