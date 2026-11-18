@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vorq-provider"
-version = "0.1.0rc1"
+version = "0.2.0"
 description = "VORQ provider daemon (vorqd)"
 readme = "README.md"
 license = "FSL-1.1-ALv2"

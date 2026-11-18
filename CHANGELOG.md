@@ -6,6 +6,10 @@ All notable changes to `vorqd` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-18
+
+The first stable release. Every release from here bumps the patch version.
+
 ### Added
 
 - A backend answering `402` (account out of funds) takes every model off the
