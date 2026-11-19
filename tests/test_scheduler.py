@@ -2384,14 +2384,16 @@ async def test_a_token_backend_reporting_no_prompt_count_settles_at_units_in_wit
                for r in caplog.records if r.levelno == logging.WARNING)
 
 
-async def test_a_prompt_count_over_units_in_is_logged_at_error_and_clamped(caplog):
-    with caplog.at_level(logging.ERROR):
+async def test_a_prompt_count_over_units_in_is_clamped_with_a_warning_not_an_error(caplog):
+    # A short prompt's byte ceiling does not cover the backend's chat template:
+    # an accepted cost of the byte ceiling, so a warning, never an error report.
+    with caplog.at_level(logging.WARNING):
         _, job, payload, _, _ = await _settled_with(
             UsageDriver(prompt=TEXT_UNITS_IN + 5, cached=TEXT_UNITS_IN + 5))
     assert payload["prompt_tok"] == job.units_in
     assert payload["cached_tok"] == job.units_in        # never above the prompt count
-    assert any("exceeds the order's units_in" in r.getMessage()
-               for r in caplog.records if r.levelno == logging.ERROR)
+    over = [r for r in caplog.records if "exceeds the order's units_in" in r.getMessage()]
+    assert over and all(r.levelno == logging.WARNING for r in over)
 
 
 async def test_an_embedding_settles_its_prompt_count_and_no_output():

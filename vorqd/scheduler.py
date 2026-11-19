@@ -1698,9 +1698,11 @@ class Scheduler:
         order's ``units_in`` and nothing is cached. A token backend that reports
         no prompt count settles at ``units_in`` — the ceiling the client already
         escrowed — with a warning, never a failed job. A reported count above
-        ``units_in`` is logged at error (the pre-claim guard let through an order
-        it should have refused) and clamped, as the chain would clamp it; the
-        cached part is clamped to the prompt count the same way.
+        ``units_in`` is clamped, as the chain would clamp it, with a warning: the
+        ceiling is the prompt's byte length, and the backend's chat template adds
+        tokens a short prompt's bytes do not cover — the accepted cost of a byte
+        ceiling, not a fault. The cached part is clamped to the prompt count the
+        same way.
         """
         units_in = int(job.units_in or 0)
         if normalized.kind == "media":
@@ -1711,9 +1713,10 @@ class Scheduler:
                         model.model, extra={"job_id": job.job_id})
             prompt = units_in
         elif prompt > units_in:
-            log.error("backend prompt count %s exceeds the order's units_in %s for %s; the "
-                      "pre-claim input guard is too loose", prompt, units_in, model.model,
-                      extra={"job_id": job.job_id})
+            log.warning("backend prompt count %s exceeds the order's units_in %s for %s; "
+                        "settling at units_in (chat-template tokens past a short prompt's "
+                        "byte ceiling)", prompt, units_in, model.model,
+                        extra={"job_id": job.job_id})
             prompt = units_in
         cached = normalized.cached_tokens
         if not isinstance(cached, int) or isinstance(cached, bool) or cached < 0:
