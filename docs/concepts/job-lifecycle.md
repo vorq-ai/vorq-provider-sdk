@@ -68,6 +68,15 @@ The chain computes the charge from the rates the client signed and the signed us
 supplies, and the correct values are defined as the backend's tokenization of the delivered
 input and output, so an inflated count is disputable.
 
+## Payouts
+
+Each settle credits the charge to your provider id inside the job registry. The coordinator
+pays the credited total to your current operator key once a day, gaslessly. Anyone may also
+trigger the payout at any time by calling `payProvider(providerId)` on the job registry from
+any wallet that holds ETH for gas; the funds always go to the operator key the provider
+registry records for the id, so rotating that key redirects every later payout. The daemon
+takes no part in payouts and needs no configuration for them.
+
 ## The SLA guard
 
 The deadline is enforced on-chain: a late settle is refused. If the backend finishes after

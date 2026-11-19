@@ -355,18 +355,18 @@
         "message": {
           "from": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
           "to": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-          "value": "30212",
+          "value": "5212",
           "validAfter": "0",
           "validBefore": "1800003601",
           "nonce": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40"
         }
       },
-      "digest": "0x2b7263b0ff3020670f13a059e0fc6d896edd26032eed9344854e45f279bbb616",
+      "digest": "0x25fa2bf4f145b0cc77c2c511afb0c21967d6c6f08f1138706b73abac5cfc3a91",
       "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
-      "signature": "0x167d3c0aeceaf3ba175267cfeafa431d647c5ca8d17c0c14d98ab7ba1168c2764af043ec88f9df304ca2e3f11ed7458acdd1a643b07b107d2d977ecc9c474c401c",
+      "signature": "0x2c6ff9674da069e80a7ed3a05e7d7bcdc1ecd6c2a127a6c283c374af5033353f36618074ea2c5b3cde379b1b8c098d350b704552e3890398b8c8580f94ce0f4d1c",
       "extra": {
         "job_id": "0x74df3a3c4f813c80a4d5e27bd099a78751a21c05735003c6b86430aa2bbd8b40",
-        "amount": "30212"
+        "amount": "5212"
       }
     },
     {
@@ -1021,6 +1021,56 @@
       "digest": "0xc5acacb9bc5dfde1150d8d4ddbd11a1badbdcd378a5c1c69d77c8b20b72b97d6",
       "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
       "signature": "0x91ef95fda3b7df0feb0985f24ec38fd4b03cf902ea3fd78b6ca106c9b69b7c79496a9095230ae6033e5876b4f310657f7e60bb4ecbe2b643476ca5c1e52ce74b1c"
+    },
+    {
+      "name": "withdraw",
+      "domain": "job_registry",
+      "typed_data": {
+        "types": {
+          "EIP712Domain": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "string"
+            },
+            {
+              "name": "chainId",
+              "type": "uint256"
+            },
+            {
+              "name": "verifyingContract",
+              "type": "address"
+            }
+          ],
+          "Withdraw": [
+            {
+              "name": "amount",
+              "type": "uint128"
+            },
+            {
+              "name": "issuedAt",
+              "type": "uint64"
+            }
+          ]
+        },
+        "primaryType": "Withdraw",
+        "domain": {
+          "name": "VORQ Jobs",
+          "version": "2",
+          "chainId": 84532,
+          "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+        },
+        "message": {
+          "amount": "1000",
+          "issuedAt": 1800000000
+        }
+      },
+      "digest": "0xb789f9d1c63258d12585144b6bae0205d28b70728f75639f3dcfb93c02fb603b",
+      "signer": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+      "signature": "0xceade56db596d35670968632903fa7c5c5406ab97c5d95696f973bb9d69ede886322ecdc94176864e77aaf3901ac8022cad864487b5a10740d40d122dd5912c81c"
     }
   ]
 }
