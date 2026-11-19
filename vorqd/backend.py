@@ -85,17 +85,78 @@ def _flat_tool(tool):
     return tool
 
 
+def _responses_part(part, role: str):
+    """One chat content part in the Responses spelling; anything else verbatim.
+
+    ``text`` is ``input_text`` on an input turn and ``output_text`` on an
+    assistant turn; ``image_url`` (an object with ``url`` and maybe ``detail``,
+    or a bare string) is ``input_image`` with the URL as a string.
+    """
+    if not isinstance(part, dict):
+        return part
+    kind = part.get("type")
+    if kind == "text":
+        return {"type": "output_text" if role == "assistant" else "input_text",
+                "text": part.get("text")}
+    if kind == "image_url":
+        image = part.get("image_url")
+        out = {"type": "input_image",
+               "image_url": image.get("url") if isinstance(image, dict) else image}
+        if isinstance(image, dict) and image.get("detail") is not None:
+            out["detail"] = image["detail"]
+        return out
+    return part
+
+
+def _responses_input(messages) -> list:
+    """Chat messages as Responses input items.
+
+    A Responses endpoint refuses the chat spelling of anything but a plain
+    string turn: content parts are respelled (:func:`_responses_part`), an
+    assistant's ``tool_calls`` become ``function_call`` items after its message,
+    and a ``tool`` turn becomes a ``function_call_output``. An item that is
+    already a Responses item (it has no ``role``) passes through.
+    """
+    if not isinstance(messages, list):
+        return messages
+    items: list = []
+    for msg in messages:
+        if not isinstance(msg, dict) or "role" not in msg:
+            items.append(msg)
+            continue
+        role = msg["role"]
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = [_responses_part(p, role) for p in content]
+        if role == "tool":
+            items.append({"type": "function_call_output", "call_id": msg.get("tool_call_id"),
+                          "output": content if content is not None else ""})
+            continue
+        if content not in (None, "", []):
+            items.append({"role": role, "content": content})
+        for call in msg.get("tool_calls") or [] if role == "assistant" else []:
+            fn = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(fn, dict):
+                items.append(call)
+                continue
+            args = fn.get("arguments")
+            items.append({"type": "function_call", "call_id": call.get("id"), "name": fn.get("name"),
+                          "arguments": args if isinstance(args, str) else json.dumps(args or {})})
+    return items
+
+
 def _responses_dialect(body: dict) -> dict:
     """Respell, in place, every chat-completion key whose Responses spelling differs.
 
-    `messages` → `input`; `max_tokens` → `max_output_tokens`; `reasoning_effort`
+    `messages` → `input`, each message respelled as Responses items
+    (:func:`_responses_input`); `max_tokens` → `max_output_tokens`; `reasoning_effort`
     → `reasoning.effort` (merged into an existing `reasoning` object);
     `response_format` → `text.format`, with a `json_schema` wrapper flattened;
     function tools and a function `tool_choice` lose their `function` nesting.
     Keys already in the Responses spelling pass through untouched.
     """
     if "messages" in body:
-        body["input"] = body.pop("messages")
+        body["input"] = _responses_input(body.pop("messages"))
     if "max_tokens" in body:
         body["max_output_tokens"] = body.pop("max_tokens")
     if "reasoning_effort" in body:

@@ -81,6 +81,10 @@ restart.
 | Chat field | Responses field |
 |---|---|
 | `messages` | `input` |
+| content part `text` | `input_text` (`output_text` on an assistant turn) |
+| content part `image_url` | `input_image` with the URL as a string, `detail` kept |
+| assistant `tool_calls` | `function_call` items after the assistant message |
+| `tool` turn | `function_call_output` item |
 | `max_tokens` | `max_output_tokens` |
 | `reasoning_effort` | `reasoning.effort` (merged into an existing `reasoning`) |
 | `response_format` | `text.format` (merged into an existing `text`; a `json_schema` wrapper is flattened) |

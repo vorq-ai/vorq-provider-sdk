@@ -1588,6 +1588,40 @@ async def test_openai_responses_respells_the_chat_dialect():
     assert "reasoning_max_tokens" not in body
 
 
+async def test_openai_responses_respells_parts_and_tool_turns():
+    """A Responses endpoint answers 400 to the chat spelling of anything but a
+    plain string turn (measured live, 2026-11-19): typed parts, images and tool
+    turns are respelled; a plain string and a native item pass through."""
+    captured = {}
+    driver = _responses_driver(responses_backend(statuses=[RESPONSE_DONE], log=[], captured=captured))
+    await driver.run(text_job(), {"messages": [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is it"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA==", "detail": "low"}},
+            {"type": "image_url", "image_url": "https://example.com/a.png"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "checking"}],
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "look", "arguments": "{\"x\":1}"}}]},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "look", "arguments": {"x": 2}}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "a cat"},
+        {"type": "function_call_output", "call_id": "c2", "output": "a dog"},
+    ]})
+    assert captured["body"]["input"] == [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": [
+            {"type": "input_text", "text": "what is it"},
+            {"type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "low"},
+            {"type": "input_image", "image_url": "https://example.com/a.png"}]},
+        {"role": "assistant", "content": [{"type": "output_text", "text": "checking"}]},
+        {"type": "function_call", "call_id": "c1", "name": "look", "arguments": '{"x":1}'},
+        {"type": "function_call", "call_id": "c2", "name": "look", "arguments": '{"x": 2}'},
+        {"type": "function_call_output", "call_id": "c1", "output": "a cat"},
+        {"type": "function_call_output", "call_id": "c2", "output": "a dog"},
+    ]
+
+
 async def test_openai_responses_json_object_format_passes_through():
     captured = {}
     driver = _responses_driver(responses_backend(statuses=[RESPONSE_DONE], log=[], captured=captured))

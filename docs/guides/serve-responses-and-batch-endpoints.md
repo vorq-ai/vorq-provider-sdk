@@ -25,7 +25,8 @@ The daemon submits `POST {base_url}/responses` with `background: true`, then pol
 the status is `completed`. `failed`, `cancelled` and `incomplete` fail the job.
 
 The request body is built like an `openai-chat` body and then respelled into Responses field
-names (`messages` becomes `input`, `max_tokens` becomes `max_output_tokens`, and so on). The
+names (`messages` becomes `input`, content parts and tool turns become Responses items,
+`max_tokens` becomes `max_output_tokens`, and so on). The
 finished object is converted back into a chat completion, so clients read the same shape from
 every text backend.
 
