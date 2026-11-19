@@ -614,7 +614,36 @@ ENVELOPE_SLACK_BYTES = 640
 TOKEN_MODALITIES = frozenset({"text", "embedding"})
 
 
-def input_shortfall(job, payload_bytes: int, *, modality: str | None) -> int:
+def text_image_count(input) -> int:
+    """The image parts a text request carries, each priced at ``TEXT_IMAGE_UNITS``.
+
+    Every JSON object at any depth whose ``type`` is an image type counts, inline
+    or by URL — the same walk both client SDKs sign with, over everything the
+    backend is handed, so there is no place to put an image that this count does
+    not see. A part of a type nothing prices (sound, video, files) and a request
+    past the cap raise :class:`MediaInputRefused`.
+    """
+    count = 0
+    stack = [input]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            kind = node.get("type")
+            if isinstance(kind, str):
+                if kind in media_units.TEXT_REFUSED_TYPES:
+                    raise MediaInputRefused(f"a {kind!r} part is not priced on this network")
+                if kind in media_units.TEXT_IMAGE_TYPES:
+                    count += 1
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    if count > media_units.MAX_TEXT_IMAGES:
+        raise MediaInputRefused(
+            f"the request carries {count} images; at most {media_units.MAX_TEXT_IMAGES} are priced")
+    return count
+
+
+def input_shortfall(job, payload_bytes: int, *, modality: str | None, images: int = 0) -> int:
     """Input units this order is short of its payload; 0 when ``units_in`` covers it.
 
     A text or embedding order's ``units_in`` is the input's canonical JSON byte
@@ -639,13 +668,19 @@ def input_shortfall(job, payload_bytes: int, *, modality: str | None) -> int:
     reads as ``"text"`` for the whole of the pre-claim sweep. The caller knows:
     before the claim it is the model being polled for, after it the job's own
     stamped value.
+
+    ``images`` is the request's image parts (:func:`text_image_count`), each owed
+    ``TEXT_IMAGE_UNITS`` on top of the bytes. Only a decrypted payload can be
+    counted, so the pre-claim floor passes 0 and the check after decryption
+    passes the count.
     """
     if modality not in TOKEN_MODALITIES:
         return 0
     declared = getattr(job, "units_in", None)
     if declared is None:
         return 0
-    return max(0, int(payload_bytes) - ENVELOPE_SLACK_BYTES - int(declared))
+    owed = int(payload_bytes) - ENVELOPE_SLACK_BYTES + media_units.TEXT_IMAGE_UNITS * images
+    return max(0, owed - int(declared))
 
 
 def _readable_list(value) -> list:

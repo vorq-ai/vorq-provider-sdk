@@ -24,7 +24,8 @@ per-megapixel or per-second backend be quoted on the same scale.
 The client signs the rates and the unit ceilings into its order. For text and embedding,
 `units_in` is the request's canonical JSON byte length: a ceiling, not a count. Text runs
 about four bytes a token, so it sits above the backend's prompt count, chat template
-included, except on a prompt of a few words. At settlement the
+included, except on a prompt of a few words. Each image part adds 32,768, a ceiling on one
+image's prompt tokens above the largest vision encoder served. At settlement the
 provider reports the backend's own usage and the chain charges
 
 ```

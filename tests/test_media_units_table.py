@@ -121,7 +121,14 @@ def test_the_daemon_prices_a_shared_case_as_the_clients_sign_it(case):
     request = case["input"]
     kind = media.shape(request)
     if kind == "text":
-        pytest.skip("token-metered: the daemon meters completion tokens, not a derivation")
+        # The daemon never reproduces the byte length (it measures the envelope),
+        # but it counts images the same way the clients sign them.
+        from vorqd.backend import text_image_count
+        canonical = len(json.dumps(request, sort_keys=True, separators=(",", ":"),
+                                   ensure_ascii=False).encode())
+        assert canonical + mu.TEXT_IMAGE_UNITS * text_image_count(request) == case["units_in"], \
+            case["why"]
+        return
     assert media.declared_reference_units(request) == case["units_in"], case["why"]
     if "units_out_override" in case:
         return                              # the caller named its own ceiling

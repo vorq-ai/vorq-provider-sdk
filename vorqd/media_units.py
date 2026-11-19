@@ -93,3 +93,17 @@ ADAPTIVE_ASPECT: str = _TABLE["adaptive_aspect"]
 #: is priced at — a cap the delivered clip settles under.
 AUTO_DURATION: str = _TABLE["auto_duration"]
 AUTO_DURATION_S: int = int(_TABLE["defaults"]["auto_duration_secs"])
+
+#: Each image part of a text request adds this many input units: a ceiling on
+#: one image's prompt tokens, above the largest encoder served. Bytes cannot
+#: bound it — an image by URL is a few hundred of them.
+TEXT_IMAGE_UNITS: int = int(_TABLE["text_images"]["units_each"])
+
+#: The ``type`` values that make a JSON object an image part, at any depth.
+TEXT_IMAGE_TYPES: frozenset[str] = frozenset(_TABLE["text_images"]["types"])
+
+#: The ``type`` values a text request may not carry: media nothing prices yet.
+TEXT_REFUSED_TYPES: frozenset[str] = frozenset(_TABLE["text_images"]["refused_types"])
+
+#: The most image parts one text request may carry.
+MAX_TEXT_IMAGES: int = int(_TABLE["caps"]["text_images"])

@@ -45,6 +45,14 @@ version, its owner (which must be the job's owner) and the key the result must b
 payload that fails any check is handed back at once with a signed `fail`, which refunds the
 client. Within 300 seconds of the claim a fail costs no reputation.
 
+For text and embedding, this is also where images are counted. Every object in the input whose
+`type` is `image_url` or `input_image`, at any depth, owes 32,768 units on top of the bytes,
+inline or by URL, because an image's token count has nothing to do with its size. An order
+whose `units_in` does not cover both is handed back as `units_in_short`, and a part of type
+`input_audio`, `audio_url`, `video_url`, `input_video`, `file` or `input_file`, or more than 64
+images, as `media_input_refused`. Before the claim the payload is sealed, so only its bytes are
+checked.
+
 The job then runs against the backend for its SLA window. Media requests are first clamped to
 the output the client paid for. Each attempt is bounded by the time left before
 `deadline − safety_margin_s`, and retryable failures are retried inside that budget (see
@@ -57,7 +65,7 @@ backend's own usage: `prompt_tok`, `cached_tok`, `completion_tok`, and `rate_in_
 For text and embedding, `prompt_tok` and `cached_tok` are the backend's prompt and cached-prompt
 counts (`cached_tok` 0 when it reports none) and `completion_tok` its output count (0 for
 embeddings). A backend reporting no prompt count settles at `units_in`, with a warning naming
-the model; a prompt count above `units_in` is logged at error and settled at `units_in`. For
+the model; a prompt count above `units_in` is logged as a warning and settled at `units_in`. For
 media, `prompt_tok` is the declared `units_in`, `cached_tok` is 0 and `completion_tok` the
 delivered pixels. Every count is capped at the order's ceiling. A sealed result up to 15,679,488 bytes travels inline with the settle; a larger one is
 uploaded to the coordinator first. The coordinator stores the bytes, names them by content id

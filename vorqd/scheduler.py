@@ -50,7 +50,14 @@ import httpx
 
 from ._crypto import BoxCipher, WalletSigner, open_dek, seal_to
 from . import media
-from .backend import DEFAULT_DIM, Normalized, input_shortfall, plan_media_units
+from .backend import (
+    DEFAULT_DIM,
+    TOKEN_MODALITIES,
+    Normalized,
+    input_shortfall,
+    plan_media_units,
+    text_image_count,
+)
 from .blob import BlobError, BlobResolver, default_resolver
 from .config import VorqdConfig
 from .container import (ContainerError, ciphertext_hash, derive_dek, sealed_plaintext_bytes,
@@ -1427,11 +1434,24 @@ class Scheduler:
         # build that never checked. Re-checked at the point of use for the same
         # reason `_open_task` re-verifies the commitment the fetch already
         # verified.
-        short = input_shortfall(job, len(plaintext), modality=job.modality)
+        #
+        # Images are counted here, on the decrypted input, because only here can
+        # they be: each one owes its token ceiling on top of the bytes, and an
+        # image by URL is a few hundred bytes the floor before the claim cannot
+        # tell from text. An order short of them is handed back inside the grace
+        # window, before any backend sees it.
+        images = 0
+        if job.modality in TOKEN_MODALITIES:
+            try:
+                images = text_image_count(env["input"])
+            except MediaInputRefused as exc:
+                raise PayloadError("media_input_refused", str(exc)) from exc
+        short = input_shortfall(job, len(plaintext), modality=job.modality, images=images)
         if short:
             raise PayloadError(
                 "units_in_short",
-                f"the declared {job.units_in} input units are {short} short of the envelope",
+                f"the declared {job.units_in} input units are {short} short of the envelope"
+                + (f" and its {images} image(s)" if images else ""),
             )
         result_key = env.get("result_key")
         if not result_key or not isinstance(result_key, str):

@@ -5224,3 +5224,58 @@ async def test_a_render_larger_than_its_cap_states_the_units_that_settle():
     payload = json.loads(_open_sealed(sealed, RESULT_SECRET))
     assert units == payload["units"] == 1024 * 1024
     assert payload["images"][0]["width"] == 2048
+
+
+# -- images in a text request: each owes its token ceiling on top of the bytes ----
+
+_URL_IMAGE = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+
+
+async def _image_text_case(payload, *, owed_extra, model_config=None):
+    """Run one text job over ``payload`` declaring its bytes plus ``owed_extra``."""
+    from vorqd import media_units
+    clock = Clock()
+    job_id, task_cid = pin_task(payload)
+    carried = sealed_plaintext_bytes(len(await SOURCE.get(task_cid)))
+    job = EvmJob(job_id=job_id, model=MODEL, state="Open", sla="1h", created_at=1000,
+                 owner=OWNER, rate_in=200_000, rate_out=600_000,
+                 units_in=max(1, carried - ENVELOPE_SLACK_BYTES) + owed_extra, units_out=128,
+                 task_cid=task_cid, expires_at=99_000)
+    chain = FakeNode([job], clock)
+    metrics = FakeMetrics()
+    driver = FakeDriver()
+    sched = make_scheduler(make_config([model_config or text_model()]), chain, driver, clock, metrics)
+    await sched.run_once()
+    await sched.join()
+    return job, chain, metrics, driver, media_units.TEXT_IMAGE_UNITS
+
+
+def _chat(*parts):
+    return {"messages": [{"role": "user", "content": [{"type": "text", "text": "what is it"}, *parts]}],
+            "max_tokens": 8}
+
+
+async def test_an_image_by_url_priced_as_bytes_is_handed_back_before_the_backend():
+    """The hole: a few hundred bytes the pre-claim floor admits, thousands of tokens
+    the backend would read. Counted after decryption, failed inside the grace."""
+    job, chain, metrics, driver, _ = await _image_text_case(_chat(_URL_IMAGE), owed_extra=0)
+    assert metrics.fails == ["units_in_short"]
+    assert chain.failed == [job.job_id]
+    assert chain.settled == []
+    assert driver.last_timeout_s is None          # the backend never ran
+
+
+async def test_an_order_that_pays_each_images_ceiling_runs():
+    from vorqd import media_units
+    job, chain, metrics, _, _ = await _image_text_case(
+        _chat(_URL_IMAGE, _URL_IMAGE), owed_extra=2 * media_units.TEXT_IMAGE_UNITS)
+    assert [s[0] for s in chain.settled] == [job.job_id]
+    assert metrics.fails == []
+
+
+async def test_an_unpriced_media_part_is_handed_back():
+    job, chain, metrics, _, _ = await _image_text_case(
+        _chat({"type": "input_audio", "input_audio": {"data": "AA==", "format": "wav"}}),
+        owed_extra=10**6)
+    assert metrics.fails == ["media_input_refused"]
+    assert chain.failed == [job.job_id]
